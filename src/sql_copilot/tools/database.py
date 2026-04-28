@@ -1,7 +1,7 @@
 """
 Database manager
 
-This module provides a simple SQLite database manager focused on safe read-only access. 
+This module provides a simple SQLite database manager focused on read-only access.
 It allows you to list tables, get table schemas, 
 preview table data, and execute SELECT queries with parameterization and result limits. 
 """
@@ -28,9 +28,6 @@ class DatabaseNotFoundError(DatabaseError):
 class TableNotFoundError(DatabaseError):
     """Raised when a requested table does not exist."""
 
-class UnsafeQueryError(DatabaseError):
-    """Raised when an unsafe SQL query is provided."""
-
 @dataclass(slots=True)
 class QueryResult:
     """Class QueryResult to hold the results of a SELECT query execution."""
@@ -41,7 +38,7 @@ class QueryResult:
 
 
 class SQLiteDatabase:
-    """Small SQLite helper focused on safe read-only access."""
+    """Small SQLite helper focused on read-only access."""
 
     def __init__(self, database_path: str | Path | None = None) -> None:
         """
@@ -175,8 +172,8 @@ class SQLiteDatabase:
         limit: int | None = 200,
     ) -> QueryResult:
         """
-        Execute a read-only SELECT query against the SQLite database 
-        with optional parameterization and result limiting.
+        Execute a SQL query against the SQLite database with optional
+        parameterization and result limiting.
 
         Args:
             query: The SQL SELECT query to execute.
