@@ -191,11 +191,14 @@ class SQLiteDatabase:
         row_limit = self._check_limit(limit)
 
         # Execute the query and fetch results with the specified limit
-        with self.connection() as conn:
-            cursor = conn.execute(query, parameters or ())
-            columns = [column[0] for column in cursor.description or []]
-            rows = cursor.fetchmany(row_limit)
-            extra_row = cursor.fetchone()
+        try:
+            with self.connection() as conn:
+                cursor = conn.execute(query, parameters or ())
+                columns = [column[0] for column in cursor.description or []]
+                rows = cursor.fetchmany(row_limit)
+                extra_row = cursor.fetchone()
+        except sqlite3.Error as exc:
+            raise DatabaseError(str(exc)) from exc
 
         # Return the results in a structured format
         result_rows = [dict(row) for row in rows]
