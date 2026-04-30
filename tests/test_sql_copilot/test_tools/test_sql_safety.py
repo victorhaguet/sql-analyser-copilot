@@ -1,5 +1,12 @@
 """Test the SQL safety module."""
+import sys
 import unittest
+from pathlib import Path
+
+for parent in Path(__file__).resolve().parents:
+    if (parent / "src").exists():
+        sys.path.insert(0, str(parent))
+        break
 
 from src.sql_copilot.tools.sql_safety import (
     EmptyQueryError,
