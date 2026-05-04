@@ -5,10 +5,10 @@ from pathlib import Path
 
 for parent in Path(__file__).resolve().parents:
     if (parent / "src").exists():
-        sys.path.insert(0, str(parent))
+        sys.path.insert(0, str(parent / "src"))
         break
 
-from src.sql_copilot.tools.sql_safety import (
+from sql_copilot.tools.sql_safety import (
     EmptyQueryError,
     ForbiddenKeywordError,
     InvalidQueryError,

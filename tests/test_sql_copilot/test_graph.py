@@ -9,10 +9,10 @@ from pathlib import Path
 
 for parent in Path(__file__).resolve().parents:
     if (parent / "src").exists():
-        sys.path.insert(0, str(parent))
+        sys.path.insert(0, str(parent / "src"))
         break
 
-from src.sql_copilot.tools.database import SQLiteDatabase
+from sql_copilot.tools.database import SQLiteDatabase
 
 
 class FakeResponse:
@@ -109,7 +109,7 @@ class SQLGraphTestCase(unittest.TestCase):
 
     def test_build_graph_stops_when_validation_fails(self) -> None:
         """Test that the graph correctly halts execution when SQL validation fails."""
-        from src.sql_copilot.graph import build_sql_agent_graph
+        from sql_copilot.graph import build_sql_agent_graph
 
         graph = build_sql_agent_graph(FakeModel("DELETE FROM Artist"), database=SQLiteDatabase())
         result = graph.invoke({"question": "Delete artists"})
