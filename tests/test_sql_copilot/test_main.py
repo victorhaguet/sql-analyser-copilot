@@ -9,10 +9,10 @@ from pathlib import Path
 
 for parent in Path(__file__).resolve().parents:
     if (parent / "src").exists():
-        sys.path.insert(0, str(parent))
+        sys.path.insert(0, str(parent / "src"))
         break
 
-from src.sql_copilot.tools.database import SQLiteDatabase
+from sql_copilot.tools.database import SQLiteDatabase
 
 
 class FakeResponse:
@@ -61,7 +61,7 @@ class MainTestCase(unittest.TestCase):
 
     def test_answer_question_runs_full_pipeline(self) -> None:
         """Test that the answer_question function correctly orchestrates the full pipeline from question to analysis."""
-        from src.sql_copilot.main import answer_question
+        from sql_copilot.main import answer_question
 
         generator_model = FakeModel(
             "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"

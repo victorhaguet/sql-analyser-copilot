@@ -3,3 +3,6 @@ venv/
 
 # pycache files
 __pycache__/
+
+# .env
+.env

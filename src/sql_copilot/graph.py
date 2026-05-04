@@ -6,13 +6,13 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph  # type: ignore[import-not-found]
 
-from src.sql_copilot.nodes.result_analyst import ResultAnalystNode
-from src.sql_copilot.nodes.sql_executor import SQLExecutorNode
-from src.sql_copilot.nodes.sql_generator import SQLGeneratorModel, SQLGeneratorNode
-from src.sql_copilot.nodes.sql_validator import SQLValidatorNode
-from src.sql_copilot.state import SQLAgentState
-from src.sql_copilot.tools.database import SQLiteDatabase
-from src.sql_copilot.tools.sql_safety import SQLSafetyValidator
+from sql_copilot.nodes.result_analyst import ResultAnalystNode
+from sql_copilot.nodes.sql_executor import SQLExecutorNode
+from sql_copilot.nodes.sql_generator import SQLGeneratorModel, SQLGeneratorNode
+from sql_copilot.nodes.sql_validator import SQLValidatorNode
+from sql_copilot.state import SQLAgentState
+from sql_copilot.tools.database import SQLiteDatabase
+from sql_copilot.tools.sql_safety import SQLSafetyValidator
 
 
 def _route_after_validation(state: SQLAgentState) -> str:

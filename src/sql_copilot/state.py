@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from src.sql_copilot.tools.database import QueryResult
+from sql_copilot.tools.database import QueryResult
 
 
 class SQLAgentState(TypedDict, total=False):
