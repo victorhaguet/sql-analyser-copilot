@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from src.sql_copilot.tools.database import DEFAULT_DB_PATH
+from sql_copilot.tools.database import DEFAULT_DB_PATH
 
 # Keywords forbidden in SQL queries
 FORBIDDEN_KEYWORDS = (

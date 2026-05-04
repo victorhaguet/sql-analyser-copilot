@@ -7,7 +7,8 @@ from typing import Any, Protocol
 
 from jinja2 import Environment, StrictUndefined
 
-from src.sql_copilot.tools.database import SQLiteDatabase, get_default_database
+from sql_copilot.state import SQLAgentState
+from sql_copilot.tools.database import SQLiteDatabase, get_default_database
 
 # Get the prompt template for SQL generation.
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "sql_generator.j2"
@@ -167,7 +168,7 @@ class SQLGeneratorNode:
             ),
         )
 
-    def __call__(self, state: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, state: SQLAgentState) -> dict[str, Any]:
         """
         Generate SQL from the question in the state and return it in a new state dictionary.
 

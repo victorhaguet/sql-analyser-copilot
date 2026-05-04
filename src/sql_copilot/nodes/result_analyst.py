@@ -6,13 +6,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.sql_copilot.nodes.sql_generator import (
+from sql_copilot.nodes.sql_generator import (
     SQLGeneratorModel,
     _load_prompt,
     _model_output_to_text,
     _render_prompt,
 )
-from src.sql_copilot.tools.database import QueryResult
+from sql_copilot.state import SQLAgentState
+from sql_copilot.tools.database import QueryResult
 
 # Get the prompt template for result analysis.
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "result_analyst.j2"
@@ -56,7 +57,7 @@ class ResultAnalystNode:
             ),
         )
 
-    def __call__(self, state: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, state: SQLAgentState) -> dict[str, Any]:
         """
         Analyze the query result and update the state with the analysis.
 

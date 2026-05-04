@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.sql_copilot.tools.database import DatabaseError, SQLiteDatabase, get_default_database
+from sql_copilot.state import SQLAgentState
+from sql_copilot.tools.database import DatabaseError, SQLiteDatabase, get_default_database
 
 
 class SQLExecutorNode:
@@ -19,7 +20,7 @@ class SQLExecutorNode:
         self.database = database or get_default_database()
         self.limit = limit
 
-    def __call__(self, state: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, state: SQLAgentState) -> dict[str, Any]:
         """
         Execute the validated SQL and update the state with the query result.
 
