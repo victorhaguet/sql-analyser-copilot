@@ -1,0 +1,129 @@
+<style>
+
+/* Colors */
+:root {
+    --ink: #111827;
+    --muted: #5b6474;
+    --line: rgba(17, 24, 39, 0.10);
+    --panel: #ffffff;
+    --shadow: 0 24px 70px rgba(15, 23, 42, 0.10);
+    --accent: #0f766e;
+}
+
+/* Global Styles */
+.stApp {
+    background:
+        radial-gradient(circle at top left, rgba(45, 212, 191, 0.20), transparent 24%),
+        radial-gradient(circle at top right, rgba(249, 115, 22, 0.14), transparent 22%),
+        linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+}
+
+/* Header Styles */
+.st-key-header {
+    background: white;
+    padding: 1rem;
+}
+
+/* Result Styles */
+.st-key-result {
+    background: white;
+    padding: 1rem;
+}
+
+/* Hide the bar on the top of the page */
+header[data-testid="stHeader"] {
+    background: transparent;
+    border: none;
+}
+
+/* Hide Streamlit's default menu */
+#MainMenu {
+    display: none !important;
+}
+
+
+/* Main content container */
+.block-container {
+    max-width: 1180px;
+    padding-top: 1.2rem;
+    padding-bottom: 3rem;
+}
+
+/*title styles*/
+[data-testid="stTitleContainer"] h2 {
+    color: #0f766e !important;
+    font-weight: bold !important;
+}
+
+/* Card styles */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    box-shadow: var(--shadow);
+    padding: 0.35rem 0.4rem;
+}
+
+/* Ensure inner content blocks within cards also have white backgrounds and rounded corners */
+[data-testid="stVerticalBlockBorderWrapper"] > div {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    border-radius: 20px;
+}
+
+/* Sidebar panel */
+[data-testid="stSidebarContent"] {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+}
+
+/* Ensure bordered form/content blocks stay opaque white */
+[data-testid="stForm"],
+[data-testid="stForm"] > div,
+[data-testid="stTextAreaRootElement"],
+[data-testid="stTextAreaRootElement"] > div,
+div[data-baseweb="base-input"],
+div[data-baseweb="textarea"],
+textarea {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+}
+
+/* Adjust button styles */
+div[data-testid="stButton"] > button {
+    border-radius: 14px;
+    border: 1px solid rgba(15, 118, 110, 0.18);
+    min-height: auto;
+    padding: 0.65rem 0.9rem;
+    width: auto;
+    white-space: normal;
+    line-height: 1.25;
+}
+
+/* Primary submit button styles */
+div[data-testid="stFormSubmitButton"] > button {
+    background: linear-gradient(135deg, #0f766e 0%, #155e75 100%);
+    color: white;
+    border: none;
+    font-weight: 600;
+    min-height: 3rem;
+    border-radius: 14px;
+}
+
+/* Input and textarea styles */
+div[data-testid="stTextArea"] textarea {
+    border-radius: 16px;
+}
+
+/* Tab styles */
+div[data-testid="column"] div[data-testid="stButton"] {
+    display: flex;
+    align-items: flex-start;
+}
+
+/* Adjust tab spacing */
+div[data-testid="stTabs"] {
+    margin-top: 0.5rem;
+}
+</style>

@@ -41,7 +41,24 @@ Try it:
 curl http://127.0.0.1:8000/health
 curl -X POST http://127.0.0.1:8000/query \
   -H "content-type: application/json" \
-  -d '{"question":"Show me 5 artists"}'
+  -d '{"question":"Which 5 artists have the most albums?"}'
+```
+
+Start the Streamlit UI in a separate process:
+
+```bash
+streamlit run src/sql_copilot/streamlit_app.py
+```
+
+Defaults:
+
+- FastAPI API: `http://127.0.0.1:8000`
+- Streamlit UI: `http://127.0.0.1:8501`
+
+Optional UI configuration:
+
+```bash
+SQL_COPILOT_API_BASE_URL="http://127.0.0.1:8000"
 ```
 
 Note: `langchain-openai` targets the official OpenAI API. A custom `OPENAI_BASE_URL` can work for compatible endpoints, but some third-party providers may require a provider-specific LangChain package.
