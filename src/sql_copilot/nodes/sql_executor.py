@@ -34,8 +34,9 @@ class SQLExecutorNode:
             DatabaseError: If the SQL execution fails.
         """
         validated_sql = state.get("validated_sql", "")
+        database = state.get("selected_database") or self.database # Fallback to default database if not set in state
         try:
-            result = self.database.execute_command(validated_sql, limit=self.limit)
+            result = database.execute_command(validated_sql, limit=self.limit) 
         except DatabaseError as exc:
             return {
                 "execution_error": str(exc),

@@ -16,7 +16,12 @@ if __package__ in {None, ""}:
 from sql_copilot.graph import build_sql_agent_graph
 from sql_copilot.llms import load_models_from_env
 from sql_copilot.nodes.sql_generator import TextModel
-from sql_copilot.tools.database import DatabaseError, QueryResult, SQLiteDatabase
+from sql_copilot.tools.database import (
+    DatabaseError,
+    QueryResult,
+    RegisteredDatabase,
+    load_database_catalog_from_env,
+)
 from sql_copilot.tools.sql_safety import SQLSafetyValidator
 
 load_dotenv()
@@ -48,6 +53,7 @@ class QueryResponse(BaseModel):
 
     question: str
     schema_overview: str | None = None
+    selected_database: str | None = None
     generated_sql: str | None = None
     validated_sql: str | None = None
     sql_validation_error: str | None = None
@@ -91,6 +97,7 @@ def _serialize_state(state: dict[str, Any], question: str) -> QueryResponse:
     return QueryResponse(
         question=question,
         schema_overview=state.get("schema_overview"),
+        selected_database=(state.get("metadata") or {}).get("selected_database"),
         generated_sql=state.get("generated_sql"),
         validated_sql=state.get("validated_sql"),
         sql_validation_error=state.get("sql_validation_error"),
@@ -105,7 +112,8 @@ def answer_question(
     question: str,
     sql_generator_model: TextModel,
     analyst_model: TextModel | None = None,
-    database: SQLiteDatabase | None = None,
+    selector_model: TextModel | None = None,
+    databases: list[RegisteredDatabase] | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
 ) -> dict[str, Any]:
@@ -116,7 +124,8 @@ def answer_question(
         question: The natural language question to answer.
         sql_generator_model: The language model to use for SQL generation.
         analyst_model: The language model to use for result analysis (optional).
-        database: The SQLite database instance to use for query execution (optional).
+        selector_model: The language model to use for database selection (optional).
+        databases: The registered databases available for routing (optional).
         validator: The SQLSafetyValidator instance to use for query validation (optional).
         execution_limit: The maximum number of rows to return from query execution (default: 200).
 
@@ -126,7 +135,8 @@ def answer_question(
     graph = build_sql_agent_graph(
         sql_generator_model=sql_generator_model,
         analyst_model=analyst_model,
-        database=database,
+        selector_model=selector_model,
+        databases=databases,
         validator=validator,
         execution_limit=execution_limit,
     )
@@ -136,7 +146,8 @@ def answer_question(
 def create_app(
     sql_generator_model: TextModel | None = None,
     analyst_model: TextModel | None = None,
-    database: SQLiteDatabase | None = None,
+    selector_model: TextModel | None = None,
+    databases: list[RegisteredDatabase] | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
 ) -> FastAPI:
@@ -149,7 +160,8 @@ def create_app(
     Args:
         sql_generator_model: The language model to use for SQL generation (optional).
         analyst_model: The language model to use for result analysis (optional).
-        database: The SQLite database instance to use for query execution (optional).
+        selector_model: The language model to use for database selection (optional).
+        databases: The registered databases available for routing (optional).
         validator: The SQLSafetyValidator instance to use for query validation (optional).
         execution_limit: The maximum number of rows to return from query execution (default: 200).
 
@@ -164,7 +176,8 @@ def create_app(
     fastapi_app = FastAPI(title="SQL Analyser Copilot", version="0.1.0")
     fastapi_app.state.sql_generator_model = sql_generator_model
     fastapi_app.state.analyst_model = analyst_model
-    fastapi_app.state.database = database
+    fastapi_app.state.selector_model = selector_model
+    fastapi_app.state.databases = databases
     fastapi_app.state.validator = validator
     fastapi_app.state.execution_limit = execution_limit
 
@@ -190,7 +203,8 @@ def create_app(
                 question=payload.question,
                 sql_generator_model=fastapi_app.state.sql_generator_model,
                 analyst_model=fastapi_app.state.analyst_model,
-                database=fastapi_app.state.database,
+                selector_model=fastapi_app.state.selector_model,
+                databases=fastapi_app.state.databases,
                 validator=fastapi_app.state.validator,
                 execution_limit=payload.execution_limit,
             )
@@ -211,6 +225,8 @@ def create_app_from_env() -> FastAPI:
     return create_app(
         sql_generator_model=sql_generator_model,
         analyst_model=analyst_model,
+        selector_model=sql_generator_model,
+        databases=load_database_catalog_from_env(),
     )
 
 

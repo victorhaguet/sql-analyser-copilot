@@ -29,8 +29,16 @@ class SQLValidatorNode:
             SQLSafetyError: If the generated SQL is deemed unsafe.
         """
         generated_sql = state.get("generated_sql", "")
+
+        # Determine which database to use for validation based on the selected database in the state, or fallback to the default validator if no database is selected.
+        selected_database = state.get("selected_database")
+        validator = (
+            SQLSafetyValidator(selected_database.database_path)
+            if selected_database is not None
+            else self.validator
+        )
         try:
-            validated_sql = self.validator.assert_safe_select(generated_sql)
+            validated_sql = validator.assert_safe_select(generated_sql)
         except SQLSafetyError as exc:
             return {
                 "validated_sql": "",

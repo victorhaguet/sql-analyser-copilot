@@ -7,6 +7,8 @@ preview table data, and execute SELECT queries with parameterization and result 
 """
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -35,6 +37,15 @@ class QueryResult:
     rows: list[dict[str, Any]]
     row_count: int
     truncated: bool
+
+
+@dataclass(slots=True)
+class RegisteredDatabase:
+    """Database entry available to the SQL copilot router."""
+
+    name: str
+    description: str
+    database: SQLiteDatabase
 
 
 class SQLiteDatabase:
@@ -241,6 +252,54 @@ class SQLiteDatabase:
         return limit
 
 
+def format_database_schema(database: SQLiteDatabase) -> str:
+    """
+    Render the SQLite schema into a compact prompt-friendly string.
+
+    Args:
+        database: The SQLite database to format.
+
+    Returns:
+        A compact string representation of the schema.
+    """
+    lines: list[str] = []
+    for table_name, columns in database.get_database_schema().items():
+        column_bits = []
+        for column in columns:
+            descriptor = f'{column["name"]} {column["type"]}'
+            if column["primary_key"]:
+                descriptor += " PRIMARY KEY"
+            column_bits.append(descriptor)
+        lines.append(f'{table_name}({", ".join(column_bits)})')
+    return "\n".join(lines)
+
+
+def register_database(
+    database: SQLiteDatabase,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> RegisteredDatabase:
+    """
+    Wrap a SQLiteDatabase with routing metadata.
+
+    Args:
+        database: The database instance to register.
+        name: Optional logical name for the database.
+        description: Optional business description used by the selector.
+
+    Returns:
+        A registered database entry.
+    """
+    database_name = (name or database.database_path.stem).strip()
+    database_description = (description or f"SQLite database at {database.database_path.name}").strip()
+    return RegisteredDatabase(
+        name=database_name,
+        description=database_description,
+        database=database,
+    )
+
+
 def get_default_database() -> SQLiteDatabase:
     """
     Get the default SQLite database instance.
@@ -249,3 +308,57 @@ def get_default_database() -> SQLiteDatabase:
         SQLiteDatabase: The default SQLite database instance.
     """
     return SQLiteDatabase()
+
+
+def get_default_database_catalog() -> list[RegisteredDatabase]:
+    """Return the default single-database catalog."""
+    default_database = get_default_database()
+    return [
+        register_database(
+            default_database,
+            name="chinook",
+            description=(
+                "Music store database with artists, albums, tracks, genres, customers, "
+                "employees, invoices, and invoice lines."
+            ),
+        )
+    ]
+
+
+def load_database_catalog_from_env() -> list[RegisteredDatabase]:
+    """
+    Load the database catalog from `SQL_COPILOT_DATABASES`.
+
+    The variable must contain a JSON array. Each item supports:
+    `name`, `path`, and optional `description`.
+
+    Returns:
+        A list of registered databases. Falls back to the default catalog when unset.
+    """
+    raw_catalog = os.getenv("SQL_COPILOT_DATABASES", "").strip()
+    if not raw_catalog:
+        return get_default_database_catalog()
+
+    try:
+        entries = json.loads(raw_catalog)
+    except json.JSONDecodeError as exc:
+        raise DatabaseError("SQL_COPILOT_DATABASES must be valid JSON.") from exc
+
+    if not isinstance(entries, list) or not entries:
+        raise DatabaseError("SQL_COPILOT_DATABASES must be a non-empty JSON array.")
+
+    catalog: list[RegisteredDatabase] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise DatabaseError("Each SQL_COPILOT_DATABASES entry must be a JSON object.")
+        path = entry.get("path")
+        if not isinstance(path, str) or not path.strip():
+            raise DatabaseError("Each SQL_COPILOT_DATABASES entry must define a string `path`.")
+        catalog.append(
+            register_database(
+                SQLiteDatabase(path),
+                name=entry.get("name"),
+                description=entry.get("description"),
+            )
+        )
+    return catalog
