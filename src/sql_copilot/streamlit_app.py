@@ -277,17 +277,6 @@ def _render_results(result_state: dict[str, object]) -> None:
     Args:
         result_state: The current state of the result to display.
     """
-    # If no question has been submitted yet, show an empty state message instead of the tabs
-    if not any(
-        [
-            result_state.get("question"),
-            result_state.get("sql_query"),
-            result_state.get("ai_answer"),
-        ]
-    ):
-        st.info("Submit a question to see the generated SQL, answer, and preview rows here.")
-        return
-
     # Render the result summary and tabs
     _render_result_summary(result_state)
     answer_tab, sql_tab, data_tab = st.tabs(["Answer", "SQL", "Result Preview"])
@@ -358,8 +347,17 @@ def render_app() -> None:
                 selected_databases=selected_databases,
             )
 
-    with st.container(border=True, key="result"):
-        _render_results(st.session_state["result_state"])
+    result_state = st.session_state["result_state"]
+    has_result_content = any(
+        [
+            result_state.get("question"),
+            result_state.get("sql_query"),
+            result_state.get("ai_answer"),
+        ]
+    )
+    if has_result_content:
+        with st.container(border=True, key="result"):
+            _render_results(result_state)
 
 
 if __name__ == "__main__":
