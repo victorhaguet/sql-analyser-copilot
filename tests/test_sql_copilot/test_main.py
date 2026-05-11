@@ -12,7 +12,7 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
-from sql_copilot.tools.database import SQLiteDatabase
+from sql_copilot.tools.database import SQLiteDatabase, register_database
 
 
 class FakeResponse:
@@ -71,7 +71,7 @@ class MainTestCase(unittest.TestCase):
             question="What are the first two artists?",
             sql_generator_model=generator_model,
             analyst_model=analyst_model,
-            database=SQLiteDatabase(),
+            databases=[register_database(SQLiteDatabase())],
         )
         self.assertEqual(
             result["validated_sql"],
@@ -79,6 +79,39 @@ class MainTestCase(unittest.TestCase):
         )
         self.assertEqual(result["query_result"].row_count, 2)
         self.assertEqual(result["analysis"], "The first two artists are AC/DC and Accept.")
+
+    def test_answer_question_returns_error_when_no_database_matches(self) -> None:
+        """The entrypoint should abort before SQL generation for irrelevant questions."""
+        from sql_copilot.main import answer_question
+
+        result = answer_question(
+            question="What will the weather be tomorrow?",
+            sql_generator_model=FakeModel("SELECT Name FROM Artist"),
+            selector_model=FakeModel(
+                '{"match": false, "database": "", "reason": "No configured database matches."}'
+            ),
+            databases=[
+                register_database(SQLiteDatabase(), name="music", description="Music data"),
+                register_database(SQLiteDatabase(), name="sales", description="Sales data"),
+            ],
+        )
+        self.assertIn("No configured database matches.", result["analysis"])
+        self.assertNotIn("generated_sql", result)
+
+    def test_answer_question_rejects_irrelevant_single_database_query(self) -> None:
+        """Single-database mode should still reject clearly irrelevant questions."""
+        from sql_copilot.main import answer_question
+
+        result = answer_question(
+            question="What will the weather be tomorrow?",
+            sql_generator_model=FakeModel("SELECT Name FROM Artist"),
+            selector_model=FakeModel(
+                '{"match": false, "database": "", "reason": "This question is unrelated to the configured database."}'
+            ),
+            databases=[register_database(SQLiteDatabase())],
+        )
+        self.assertIn("unrelated to the configured database", result["analysis"])
+        self.assertNotIn("generated_sql", result)
 
 
 class FakeCompiledGraph:

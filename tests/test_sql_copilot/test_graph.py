@@ -12,7 +12,7 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
-from sql_copilot.tools.database import SQLiteDatabase
+from sql_copilot.tools.database import SQLiteDatabase, register_database
 
 
 class FakeResponse:
@@ -111,10 +111,31 @@ class SQLGraphTestCase(unittest.TestCase):
         """Test that the graph correctly halts execution when SQL validation fails."""
         from sql_copilot.graph import build_sql_agent_graph
 
-        graph = build_sql_agent_graph(FakeModel("DELETE FROM Artist"), database=SQLiteDatabase())
+        graph = build_sql_agent_graph(
+            FakeModel("DELETE FROM Artist"),
+            databases=[register_database(SQLiteDatabase())],
+        )
         result = graph.invoke({"question": "Delete artists"})
         self.assertIn("sql_validation_error", result)
         self.assertNotIn("query_result", result)
+
+    def test_build_graph_stops_when_no_database_matches(self) -> None:
+        """Questions outside the catalog should abort before SQL generation."""
+        from sql_copilot.graph import build_sql_agent_graph
+
+        graph = build_sql_agent_graph(
+            FakeModel("SELECT Name FROM Artist"),
+            selector_model=FakeModel(
+                '{"match": false, "database": "", "reason": "No configured database matches."}'
+            ),
+            databases=[
+                register_database(SQLiteDatabase(), name="music", description="Music data"),
+                register_database(SQLiteDatabase(), name="sales", description="Sales data"),
+            ],
+        )
+        result = graph.invoke({"question": "What is the weather in Berlin?"})
+        self.assertIn("execution_error", result)
+        self.assertNotIn("generated_sql", result)
 
 
 if __name__ == "__main__":
