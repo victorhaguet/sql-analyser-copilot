@@ -35,6 +35,7 @@ class QueryRequest(BaseModel):
 
     question: str = Field(min_length=1)
     execution_limit: int = Field(default=200, gt=0)
+    selected_databases: list[str] | None = None # Optional list of database names to select for this query, or None to allow all databases in the catalog
 
 
 class QueryResultPayload(BaseModel):
@@ -143,6 +144,49 @@ def answer_question(
     return graph.invoke({"question": question})
 
 
+def _select_requested_databases(
+    requested_names: list[str] | None,
+    configured_databases: list[RegisteredDatabase] | None,
+) -> list[RegisteredDatabase] | None:
+    """
+    Resolve the database subset requested by the client.
+
+    Args:
+        requested_names: Optional list of database names selected by the client.
+        configured_databases: The configured database catalog for the app.
+
+    Returns:
+        The filtered catalog, or the original configured catalog when no subset was requested.
+
+    Raises:
+        DatabaseError: If the requested selection is empty or contains unknown names.
+    """
+    # If no selection was requested, return the full catalog
+    if configured_databases is None or requested_names is None:
+        return configured_databases
+    if not requested_names:
+        raise DatabaseError("At least one database must be selected.")
+
+    # Get all the databases matching the requested names, and track any unknown names for error handling
+    configured_by_name = {database.name: database for database in configured_databases}
+    selected_databases: list[RegisteredDatabase] = []
+    unknown_names: list[str] = []
+    for name in requested_names:
+        database = configured_by_name.get(name)
+        if database is None:
+            unknown_names.append(name)
+            continue
+        selected_databases.append(database)
+
+    if unknown_names:
+        raise DatabaseError(
+            "Unknown databases requested: " + ", ".join(sorted(set(unknown_names)))
+        )
+    if not selected_databases:
+        raise DatabaseError("At least one database must be selected.")
+    return selected_databases
+
+
 def create_app(
     sql_generator_model: TextModel | None = None,
     analyst_model: TextModel | None = None,
@@ -199,12 +243,17 @@ def create_app(
             )
 
         try:
+            # Select the subset of databases to use
+            databases = _select_requested_databases(
+                payload.selected_databases,
+                fastapi_app.state.databases,
+            )
             result = answer_question(
                 question=payload.question,
                 sql_generator_model=fastapi_app.state.sql_generator_model,
                 analyst_model=fastapi_app.state.analyst_model,
                 selector_model=fastapi_app.state.selector_model,
-                databases=fastapi_app.state.databases,
+                databases=databases, # Use the filtered database list for this query
                 validator=fastapi_app.state.validator,
                 execution_limit=payload.execution_limit,
             )

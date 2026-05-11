@@ -8,6 +8,7 @@ from pathlib import Path
 
 import httpx
 import streamlit as st
+from dotenv import load_dotenv
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -17,18 +18,25 @@ from sql_copilot.streamlit_ui import (
     build_empty_result_state,
     load_stylesheet,
 )
+from sql_copilot.tools.database import (
+    DatabaseError, 
+    RegisteredDatabase, 
+    load_database_catalog_from_env
+)
+
+load_dotenv()
 
 # Constants and helper functions for the Streamlit UI
 DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_QUESTION = ""
-SAMPLE_QUESTIONS = [
-    "Which 5 artists have the most albums?",
-    "Show me the top 10 customers by total invoice amount.",
-    "Which genres generate the highest revenue?",
-]
 
 
-def call_api(question: str, execution_limit: int, api_base_url: str) -> dict[str, object]:
+def call_api(
+    question: str,
+    execution_limit: int,
+    api_base_url: str,
+    selected_databases: list[str],
+) -> dict[str, object]:
     """
     Call the FastAPI backend and map the response into UI fields.
 
@@ -36,6 +44,7 @@ def call_api(question: str, execution_limit: int, api_base_url: str) -> dict[str
         question: The user's natural language question.
         execution_limit: The maximum number of rows to return from the SQL query.
         api_base_url: The base URL of the FastAPI backend.
+        selected_databases: The database names enabled by the user.
 
     Returns:
         A dictionary with values formatted for display in the UI.
@@ -57,6 +66,7 @@ def call_api(question: str, execution_limit: int, api_base_url: str) -> dict[str
             json={
                 "question": clean_question,
                 "execution_limit": execution_limit,
+                "selected_databases": selected_databases, # Get the selected databases
             },
             timeout=120.0,
         )
@@ -91,16 +101,28 @@ def _initialize_state() -> None:
     """Populate session state with predictable defaults."""
     st.session_state.setdefault("question_input", DEFAULT_QUESTION)
     st.session_state.setdefault("result_state", build_empty_result_state())
+    st.session_state.setdefault("selected_databases", [])
 
 
-def _apply_sample_question(question: str) -> None:
+def _sync_selected_databases(databases: list[RegisteredDatabase]) -> list[str]:
     """
-    Write a sample question into the main text input.
+    Reconcile the selected database state with the configured catalog.
 
     Args:
-        question: The sample question to apply.
+        databases: The currently configured database catalog.
+
+    Returns:
+        The normalized list of selected database names.
     """
-    st.session_state["question_input"] = question
+    available_names = [database.name for database in databases]
+    current_selection = [
+        name for name in st.session_state.get("selected_databases", [])
+        if name in available_names
+    ]
+    if not current_selection:
+        current_selection = available_names.copy()
+    st.session_state["selected_databases"] = current_selection
+    return current_selection
 
 
 def _render_header() -> None:
@@ -112,14 +134,72 @@ def _render_header() -> None:
         )
 
 
-def _render_sample_prompts() -> None:
-    """Render a row of quick-start prompts."""
-    st.caption("Starter prompts")
-    columns = st.columns([1.05, 1.2, 1.0], gap="small")
-    for column, prompt in zip(columns, SAMPLE_QUESTIONS):
-        with column:
-            if st.button(prompt, key=f"sample::{prompt}", use_container_width=False):
-                _apply_sample_question(prompt)
+@st.cache_data(show_spinner=False)
+def _load_database_catalog() -> tuple[list[RegisteredDatabase], str | None]:
+    """
+    Load the configured databases for UI display.
+
+    Returns:
+        A tuple containing the configured databases and an optional error message.
+    """
+    try:
+        return load_database_catalog_from_env(), None
+    except DatabaseError as exc:
+        return [], str(exc)
+
+
+def _render_database_catalog() -> list[str]:
+    """Render the configured database catalog and return the active selection."""
+    databases, error_message = _load_database_catalog()
+
+    with st.container(border=True, key="database-catalog"):
+        st.text("Available databases")
+
+        # Errors
+        if error_message:
+            st.error(f"Database catalog configuration is invalid: {error_message}")
+            return []
+
+        if not databases:
+            st.info("No databases are configured.")
+            return []
+
+        selected_databases = _sync_selected_databases(databases)
+        selected_count = len(selected_databases)
+        st.caption(f"{selected_count} of {len(databases)} databases active")
+
+        # Database entries
+        columns = st.columns(min(len(databases), 3), gap="small")
+        for index, database_entry in enumerate(databases):
+            metadata = database_entry.database.describe()
+            table_count = len(metadata.get("tables") or [])
+            is_selected = database_entry.name in selected_databases
+            disabled = is_selected and selected_count == 1
+            with columns[index % len(columns)]:
+                with st.container(border=True):
+                    st.markdown(f"**{database_entry.name}**")
+                    st.caption("Selected" if is_selected else "Inactive")
+                    st.write(database_entry.description)
+                    st.caption(
+                        f"{table_count} tables • {Path(str(metadata['database_path'])).name}"
+                    )
+                    updated_value = st.toggle(
+                        "Use this database",
+                        value=is_selected,
+                        key=f"database-toggle::{database_entry.name}",
+                        disabled=disabled,
+                    )
+                    if updated_value != is_selected:
+                        if updated_value:
+                            selected_databases.append(database_entry.name)
+                        else:
+                            selected_databases = [
+                                name for name in selected_databases if name != database_entry.name
+                            ]
+                        st.session_state["selected_databases"] = selected_databases
+                        st.rerun()
+
+        return st.session_state["selected_databases"]
 
 
 def _render_question() -> tuple[str, bool]:
@@ -175,12 +255,14 @@ def _render_result_summary(result_state: dict[str, object]) -> None:
     query_result = result_state.get("query_result") or {}
     row_count = int(query_result.get("row_count") or 0) if isinstance(query_result, dict) else 0
     truncated = bool(query_result.get("truncated")) if isinstance(query_result, dict) else False
+    selected_database = str(result_state.get("selected_database") or "")
 
     # Display key metrics about the query result in a horizontal layout
-    metric_columns = st.columns(3)
-    metric_columns[0].metric("Rows returned", row_count)
-    metric_columns[1].metric("Execution limit", st.session_state.get("execution_limit", 200))
-    metric_columns[2].metric("Result status", "Needs review" if result_state.get("has_error") else "Ready")
+    metric_columns = st.columns(4)
+    metric_columns[0].metric("Database used", selected_database or "Unknown")
+    metric_columns[1].metric("Rows returned", row_count)
+    metric_columns[2].metric("Execution limit", st.session_state.get("execution_limit", 200))
+    metric_columns[3].metric("Result status", "Needs review" if result_state.get("has_error") else "Ready")
 
     if truncated:
         st.info(
@@ -264,7 +346,7 @@ def render_app() -> None:
 
     # Create the initial UI components for the app
     _render_header()
-    _render_sample_prompts()
+    selected_databases = _render_database_catalog()
     question, submitted = _render_question()
 
     if submitted:
@@ -273,6 +355,7 @@ def render_app() -> None:
                 question=question,
                 execution_limit=execution_limit,
                 api_base_url=api_base_url,
+                selected_databases=selected_databases,
             )
 
     with st.container(border=True, key="result"):
