@@ -4,13 +4,15 @@ Return only JSON with this shape:
 {
   "match": true or false,
   "database": "database_name_or_empty_string",
+  "candidate_databases": ["database_name"],
   "reason": "short explanation"
 }
 
 Rules:
 - Choose exactly one database only if it clearly matches the question.
 - Use the database descriptions and schemas to decide.
-- If the question is vague, off-topic, or does not fit any database, return `"match": false`.
+- If more than one database could plausibly answer the question, return `"match": false` and list every plausible database in `"candidate_databases"`.
+- If the question is vague, off-topic, or does not fit any database, return `"match": false` with an empty `"candidate_databases"` list.
 - Do not guess.
 
 Question:

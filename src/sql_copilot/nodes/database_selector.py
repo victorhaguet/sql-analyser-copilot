@@ -48,7 +48,7 @@ def _normalize_model_decision(raw_text: str) -> dict[str, Any]:
         raw_text: The raw text output from the selector model.
 
     Returns:
-        A dictionary with keys `match`, `database`, and `reason`.
+        A dictionary with keys `match`, `database`, `candidate_databases`, and `reason`.
     """
     # The model is expected to return a JSON blob, but we need to be resilient to formatting issues like code blocks or extra text.
     cleaned = raw_text.strip()
@@ -70,6 +70,11 @@ def _normalize_model_decision(raw_text: str) -> dict[str, Any]:
     return {
         "match": bool(decision.get("match")),
         "database": str(decision.get("database") or "").strip(),
+        "candidate_databases": [ # If there is an ambiguous match, all the candidate databases are returned
+            str(name).strip()
+            for name in (decision.get("candidate_databases") or [])
+            if str(name).strip()
+        ],
         "reason": str(decision.get("reason") or "").strip(),
     }
 
@@ -92,9 +97,12 @@ class DatabaseSelectorNode:
             PROMPT_PATH,
             (
                 "You route a user question to the most relevant SQLite database.\n"
-                "Return JSON with keys `match` (boolean), `database` (string), and `reason` (string).\n"
+                "Return JSON with keys `match` (boolean), `database` (string), "
+                "`candidate_databases` (list[string]), and `reason` (string).\n"
                 "Only set `match` to true when one database clearly fits the question.\n"
-                "If none fit, return `match: false` and explain why.\n\n"
+                "If multiple databases fit, return `match: false`, leave `database` empty, "
+                "and list the candidates.\n"
+                "If none fit, return `match: false`, leave `database` empty, and explain why.\n\n"
                 "Question:\n{{ question }}\n\n"
                 "Available databases:\n{{ catalog_payload }}\n"
             ),
@@ -130,7 +138,17 @@ class DatabaseSelectorNode:
             catalog_payload=_build_catalog_payload(self.databases),
         )
         decision = _normalize_model_decision(_model_output_to_text(self.model.invoke(prompt)))
-        if not decision["match"]: # If no match, return an error with the model's reason or a default message
+
+        # If the model didn't find a clear match
+        if not decision["match"]:
+            # Return ambiguous message
+            candidate_names = self._valid_candidate_names(decision["candidate_databases"])
+            if len(candidate_names) > 1:
+                reason = decision["reason"] or (
+                    "The question could match more than one available database."
+                )
+                return self._ambiguity_result(candidate_names, reason)
+
             reason = decision["reason"] or (
                 "The question does not clearly correspond to any available database."
             )
@@ -149,6 +167,24 @@ class DatabaseSelectorNode:
             "The question could not be matched to a configured database. "
             "Reformulate the question and be more specific about the data you want."
         )
+
+    def _valid_candidate_names(self, candidate_names: list[str]) -> list[str]:
+        """
+        Return candidate names that exist in the configured catalog.
+        
+        Args:
+            candidate_names: A list of candidate database names returned by the model.
+
+        Returns:
+            A list of candidate names that are valid according to the configured databases.
+        """
+        available_names = {entry.name for entry in self.databases}
+        normalized_candidates: list[str] = []
+        for name in candidate_names:
+            if name not in available_names or name in normalized_candidates:
+                continue
+            normalized_candidates.append(name)
+        return normalized_candidates
 
     def _selection_result(self, entry: RegisteredDatabase, *, reason: str) -> dict[str, Any]:
         """
@@ -189,5 +225,32 @@ class DatabaseSelectorNode:
             "analysis": message,
             "metadata": {
                 "database_selection_failed": True,
+            },
+        }
+
+    @staticmethod
+    def _ambiguity_result(candidate_names: list[str], reason: str) -> dict[str, Any]:
+        """
+        Build the failure payload for questions that fit multiple databases.
+        
+        Args:
+            candidate_names: A list of candidate database names that match the question.
+            reason: The reason for the ambiguity to include in the metadata.
+
+        Returns:
+            A dictionary containing the error message and related metadata.
+        """
+        candidate_list = ", ".join(candidate_names)
+        message = (
+            f"{reason} The question matches multiple databases: {candidate_list}. "
+            "Reformulate the question and specify which database you want to use."
+        )
+        return {
+            "execution_error": message,
+            "analysis": message,
+            "metadata": {
+                "database_selection_failed": True,
+                "database_selection_ambiguous": True,
+                "candidate_databases": candidate_names,
             },
         }
