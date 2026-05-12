@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -132,6 +133,75 @@ class MainTestCase(unittest.TestCase):
         self.assertEqual(result["metadata"]["candidate_databases"], ["music", "sales"])
         self.assertNotIn("generated_sql", result)
 
+    def test_answer_question_can_include_execution_trace(self) -> None:
+        """The entrypoint can attach a normalized execution trace for debugging."""
+        from sql_copilot.main import answer_question
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = answer_question(
+                question="What are the first two artists?",
+                sql_generator_model=FakeModel(
+                    "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
+                ),
+                analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
+                databases=[register_database(SQLiteDatabase())],
+                include_trace=True,
+                trace_log_dir=temp_dir,
+            )
+
+            trace = result["metadata"]["execution_trace"]
+            self.assertEqual(trace[0]["node"], "database_selector")
+            self.assertEqual(trace[-1]["node"], "result_analyst")
+            self.assertEqual(trace[-1]["state"]["analysis"], result["analysis"])
+            self.assertTrue(Path(result["metadata"]["trace_log_path"]).exists())
+
+    def test_answer_question_creates_trace_log_file(self) -> None:
+        """Each run should create a persisted trace log file."""
+        from sql_copilot.main import answer_question
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = answer_question(
+                question="What are the first two artists?",
+                sql_generator_model=FakeModel(
+                    "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
+                ),
+                analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
+                databases=[register_database(SQLiteDatabase())],
+                trace_log_dir=temp_dir,
+            )
+
+            log_path = Path(result["metadata"]["trace_log_path"])
+            self.assertTrue(log_path.exists())
+            self.assertEqual(log_path.parent, Path(temp_dir))
+            log_content = log_path.read_text(encoding="utf-8")
+
+        self.assertIn("Human Message", log_content)
+        self.assertIn("What are the first two artists?", log_content)
+        self.assertIn("Name: sql_executor", log_content)
+        self.assertIn("The first two artists are AC/DC and Accept.", log_content)
+
+    def test_stream_question_returns_database_selection_failure_step(self) -> None:
+        """Streaming should expose early aborts at the selector step."""
+        from sql_copilot.main import stream_question
+
+        steps = list(
+            stream_question(
+                question="What will the weather be tomorrow?",
+                sql_generator_model=FakeModel("SELECT Name FROM Artist"),
+                selector_model=FakeModel(
+                    '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
+                ),
+                databases=[
+                    register_database(SQLiteDatabase(), name="music", description="Music data"),
+                    register_database(SQLiteDatabase(), name="sales", description="Sales data"),
+                ],
+            )
+        )
+
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0]["node"], "database_selector")
+        self.assertEqual(steps[0]["outcome"], "database_selection_failed")
+
 
 class FakeCompiledGraph:
     """Small in-memory executor that mimics the compiled graph API."""
@@ -152,6 +222,31 @@ class FakeCompiledGraph:
             else:
                 current = self.builder.edges.get(current)
         return state
+
+    def stream(
+        self,
+        state: dict[str, object],
+        *,
+        stream_mode: str = "updates",
+    ):
+        current = self.builder.start_target
+        state = dict(state)
+
+        while current and current != "__end__":
+            node = self.builder.nodes[current]
+            update = node(state)
+            state.update(update)
+            if stream_mode == "updates":
+                yield {current: update}
+            elif stream_mode == "values":
+                yield dict(state)
+            else:
+                raise ValueError(f"Unsupported stream mode: {stream_mode}")
+            if current in self.builder.conditional_edges:
+                router, mapping = self.builder.conditional_edges[current]
+                current = mapping[router(state)]
+            else:
+                current = self.builder.edges.get(current)
 
 
 class FakeStateGraph:

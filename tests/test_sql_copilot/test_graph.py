@@ -53,6 +53,31 @@ class FakeCompiledGraph:
                 current = self.builder.edges.get(current)
         return state
 
+    def stream(
+        self,
+        state: dict[str, object],
+        *,
+        stream_mode: str = "updates",
+    ):
+        current = self.builder.start_target
+        state = dict(state)
+
+        while current and current != "__end__":
+            node: object = self.builder.nodes[current]
+            update = node(state)  # type: ignore[operator]
+            state.update(update)
+            if stream_mode == "updates":
+                yield {current: update}
+            elif stream_mode == "values":
+                yield dict(state)
+            else:
+                raise ValueError(f"Unsupported stream mode: {stream_mode}")
+            if current in self.builder.conditional_edges:
+                router, mapping = self.builder.conditional_edges[current]
+                current = mapping[router(state)]  # type: ignore[operator]
+            else:
+                current = self.builder.edges.get(current)
+
 
 class FakeStateGraph:
     """Small StateGraph stand-in used to test wiring without langgraph installed."""
@@ -154,6 +179,26 @@ class SQLGraphTestCase(unittest.TestCase):
         result = graph.invoke({"question": "Show me recent invoice activity."})
         self.assertTrue(result["metadata"]["database_selection_ambiguous"])
         self.assertNotIn("generated_sql", result)
+
+    def test_stream_sql_agent_execution_yields_normalized_steps(self) -> None:
+        """Streaming should expose node names, updates, and merged state."""
+        from sql_copilot.graph import build_sql_agent_graph, stream_sql_agent_execution
+
+        graph = build_sql_agent_graph(
+            FakeModel("SELECT Name FROM Artist WHERE ArtistId = 1"),
+            databases=[register_database(SQLiteDatabase())],
+        )
+
+        steps = list(stream_sql_agent_execution(graph, {"question": "Who is artist 1?"}))
+
+        self.assertEqual(
+            [step["node"] for step in steps],
+            ["database_selector", "sql_generator", "sql_validator", "sql_executor", "result_analyst"],
+        )
+        self.assertEqual(steps[0]["outcome"], "database_selected")
+        self.assertEqual(steps[1]["outcome"], "sql_generated")
+        self.assertEqual(steps[-1]["outcome"], "analysis_ready")
+        self.assertEqual(steps[-1]["state"]["analysis"][:8], "Returned")
 
 
 if __name__ == "__main__":
