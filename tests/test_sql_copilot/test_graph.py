@@ -126,7 +126,7 @@ class SQLGraphTestCase(unittest.TestCase):
         graph = build_sql_agent_graph(
             FakeModel("SELECT Name FROM Artist"),
             selector_model=FakeModel(
-                '{"match": false, "database": "", "reason": "No configured database matches."}'
+                '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
             ),
             databases=[
                 register_database(SQLiteDatabase(), name="music", description="Music data"),
@@ -135,6 +135,24 @@ class SQLGraphTestCase(unittest.TestCase):
         )
         result = graph.invoke({"question": "What is the weather in Berlin?"})
         self.assertIn("execution_error", result)
+        self.assertNotIn("generated_sql", result)
+
+    def test_build_graph_stops_when_database_selection_is_ambiguous(self) -> None:
+        """Questions that fit multiple databases should abort before SQL generation."""
+        from sql_copilot.graph import build_sql_agent_graph
+
+        graph = build_sql_agent_graph(
+            FakeModel("SELECT Name FROM Artist"),
+            selector_model=FakeModel(
+                '{"match": false, "database": "", "candidate_databases": ["music", "sales"], "reason": "The question could be answered from either catalog."}'
+            ),
+            databases=[
+                register_database(SQLiteDatabase(), name="music", description="Music data"),
+                register_database(SQLiteDatabase(), name="sales", description="Sales data"),
+            ],
+        )
+        result = graph.invoke({"question": "Show me recent invoice activity."})
+        self.assertTrue(result["metadata"]["database_selection_ambiguous"])
         self.assertNotIn("generated_sql", result)
 
 

@@ -88,7 +88,7 @@ class MainTestCase(unittest.TestCase):
             question="What will the weather be tomorrow?",
             sql_generator_model=FakeModel("SELECT Name FROM Artist"),
             selector_model=FakeModel(
-                '{"match": false, "database": "", "reason": "No configured database matches."}'
+                '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
             ),
             databases=[
                 register_database(SQLiteDatabase(), name="music", description="Music data"),
@@ -106,11 +106,30 @@ class MainTestCase(unittest.TestCase):
             question="What will the weather be tomorrow?",
             sql_generator_model=FakeModel("SELECT Name FROM Artist"),
             selector_model=FakeModel(
-                '{"match": false, "database": "", "reason": "This question is unrelated to the configured database."}'
+                '{"match": false, "database": "", "candidate_databases": [], "reason": "This question is unrelated to the configured database."}'
             ),
             databases=[register_database(SQLiteDatabase())],
         )
         self.assertIn("unrelated to the configured database", result["analysis"])
+        self.assertNotIn("generated_sql", result)
+
+    def test_answer_question_returns_ambiguity_error_when_multiple_databases_match(self) -> None:
+        """The entrypoint should stop before SQL generation for ambiguous routing."""
+        from sql_copilot.main import answer_question
+
+        result = answer_question(
+            question="Show me recent invoice activity.",
+            sql_generator_model=FakeModel("SELECT Name FROM Artist"),
+            selector_model=FakeModel(
+                '{"match": false, "database": "", "candidate_databases": ["music", "sales"], "reason": "The question could be answered from either catalog."}'
+            ),
+            databases=[
+                register_database(SQLiteDatabase(), name="music", description="Music data"),
+                register_database(SQLiteDatabase(), name="sales", description="Sales data"),
+            ],
+        )
+        self.assertTrue(result["metadata"]["database_selection_ambiguous"])
+        self.assertEqual(result["metadata"]["candidate_databases"], ["music", "sales"])
         self.assertNotIn("generated_sql", result)
 
 

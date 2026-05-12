@@ -36,7 +36,7 @@ SQL_COPILOT_DATABASES='[
 ]'
 ```
 
-`SQL_COPILOT_DATABASES` lets the app route a question to the most relevant database before generating SQL. If none of the configured databases match the question, the app returns an error asking the user to reformulate the request more specifically.
+`SQL_COPILOT_DATABASES` lets the app route a question to the most relevant database before generating SQL. If none of the configured databases match the question, or if the question could match more than one configured database, the app returns an error asking the user to reformulate the request more specifically.
 
 Start the API:
 

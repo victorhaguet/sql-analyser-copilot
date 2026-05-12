@@ -53,17 +53,37 @@ class DatabaseSelectorNodeTestCase(unittest.TestCase):
                 register_database(SQLiteDatabase(), name="music", description="Music store data"),
                 register_database(SQLiteDatabase(), name="billing", description="Invoice data"),
             ],
-            model=FakeModel('{"match": false, "database": "", "reason": "No database fits this weather question."}'),
+            model=FakeModel(
+                '{"match": false, "database": "", "candidate_databases": [], "reason": "No database fits this weather question."}'
+            ),
         )
         result = node({"question": "What will the weather be tomorrow?"})
         self.assertIn("No database fits this weather question.", result["execution_error"])
         self.assertTrue(result["metadata"]["database_selection_failed"])
 
+    def test_selector_returns_ambiguity_error_when_multiple_databases_match(self) -> None:
+        """Ambiguous questions should stop before SQL generation and surface candidates."""
+        node = DatabaseSelectorNode(
+            [
+                register_database(SQLiteDatabase(), name="music", description="Music store data"),
+                register_database(SQLiteDatabase(), name="billing", description="Invoice data"),
+            ],
+            model=FakeModel(
+                '{"match": false, "database": "", "candidate_databases": ["music", "billing"], "reason": "The question could be answered from either catalog."}'
+            ),
+        )
+        result = node({"question": "Show me the latest invoices"})
+        self.assertIn("matches multiple databases: music, billing", result["execution_error"])
+        self.assertTrue(result["metadata"]["database_selection_ambiguous"])
+        self.assertEqual(result["metadata"]["candidate_databases"], ["music", "billing"])
+
     def test_single_database_can_still_reject_irrelevant_question(self) -> None:
         """Single-database mode should validate relevance when a selector model is available."""
         node = DatabaseSelectorNode(
             [register_database(SQLiteDatabase(), name="music", description="Music store data")],
-            model=FakeModel('{"match": false, "database": "", "reason": "This question is unrelated to the catalog."}'),
+            model=FakeModel(
+                '{"match": false, "database": "", "candidate_databases": [], "reason": "This question is unrelated to the catalog."}'
+            ),
         )
         result = node({"question": "What will the weather be tomorrow?"})
         self.assertIn("This question is unrelated to the catalog.", result["execution_error"])
