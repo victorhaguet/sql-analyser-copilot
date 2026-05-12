@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["answer_question", "build_sql_agent_graph"]
+__all__ = ["answer_question", "build_sql_agent_graph", "stream_question"]
 
 
 def __getattr__(name: str) -> Any:
@@ -17,4 +17,8 @@ def __getattr__(name: str) -> Any:
         from sql_copilot.main import answer_question
 
         return answer_question
+    if name == "stream_question":
+        from sql_copilot.main import stream_question
+
+        return stream_question
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

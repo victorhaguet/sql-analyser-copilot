@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterator, Literal, Protocol, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph  # type: ignore[import-not-found]
 
@@ -14,6 +14,30 @@ from sql_copilot.nodes.sql_validator import SQLValidatorNode
 from sql_copilot.state import SQLAgentState
 from sql_copilot.tools.database import RegisteredDatabase, get_default_database_catalog
 from sql_copilot.tools.sql_safety import SQLSafetyValidator
+
+TraceStreamMode = Literal["updates", "values"]
+SQLAgentStateUpdate = SQLAgentState
+
+
+class CompiledSQLAgentGraph(Protocol):
+    """Protocol for the compiled graph methods used by the trace helpers."""
+
+    def stream(
+        self,
+        state: SQLAgentState,
+        *,
+        stream_mode: TraceStreamMode = "updates",
+    ) -> Iterator[object]:
+        """Yield raw LangGraph stream events."""
+
+
+class SQLAgentTraceStep(TypedDict):
+    """Normalized view of a single graph step."""
+
+    node: str
+    update: SQLAgentStateUpdate
+    state: SQLAgentState
+    outcome: str
 
 
 def _route_after_database_selection(state: SQLAgentState) -> str:
@@ -53,6 +77,96 @@ def _route_after_execution(state: SQLAgentState) -> str:
         The next node to transition to based on the state.
     """
     return "abort" if state.get("execution_error") else "result_analyst"
+
+
+def _clone_state(state: SQLAgentState) -> SQLAgentState:
+    """Return a shallow copy of the state."""
+    return cast(SQLAgentState, dict(state))
+
+
+def _merge_state(
+    state: SQLAgentState,
+    update: SQLAgentStateUpdate,
+) -> SQLAgentState:
+    """Apply a partial state update and return the merged state."""
+    merged_state = dict(state)
+    merged_state.update(dict(update))
+    return cast(SQLAgentState, merged_state)
+
+
+def _summarize_step_outcome(update: SQLAgentStateUpdate) -> str:
+    """Classify the result of a graph step for debugging output."""
+    metadata = update.get("metadata") or {}
+    if update.get("sql_validation_error"):
+        return "validation_failed"
+    if update.get("execution_error"):
+        if metadata.get("database_selection_ambiguous"):
+            return "database_selection_ambiguous"
+        if metadata.get("database_selection_failed"):
+            return "database_selection_failed"
+        return "execution_failed"
+    if "query_result" in update:
+        return "query_executed"
+    if "analysis" in update:
+        return "analysis_ready"
+    if "generated_sql" in update:
+        return "sql_generated"
+    if "selected_database" in update:
+        return "database_selected"
+    return "updated"
+
+
+def _normalize_stream_event(
+    event: object,
+    current_state: SQLAgentState,
+    stream_mode: TraceStreamMode,
+) -> tuple[str, SQLAgentStateUpdate, SQLAgentState]:
+    """Convert a LangGraph stream event into a normalized step payload."""
+    # One update at a time with incremental state
+    if stream_mode == "updates":
+        if not isinstance(event, dict) or len(event) != 1:
+            raise TypeError(f"Unexpected graph update event: {event!r}")
+        node_name, update = next(iter(event.items()))
+        if not isinstance(node_name, str) or not isinstance(update, dict):
+            raise TypeError(f"Unexpected graph update event: {event!r}")
+        typed_update = cast(SQLAgentStateUpdate, update)
+        return node_name, typed_update, _merge_state(current_state, typed_update)
+
+    # Full state of the graph after each step
+    if not isinstance(event, dict):
+        raise TypeError(f"Unexpected graph values event: {event!r}")
+    state = cast(SQLAgentState, event)
+    return "state", _clone_state(state), _clone_state(state)
+
+
+def stream_sql_agent_execution(
+    graph: CompiledSQLAgentGraph,
+    initial_state: SQLAgentState,
+    *,
+    stream_mode: TraceStreamMode = "updates",
+) -> Iterator[SQLAgentTraceStep]:
+    """
+    Yield normalized execution steps from a compiled SQL agent graph.
+    
+    Args:
+    graph: The compiled SQL agent graph to execute.
+    initial_state: The initial state to start the graph execution from.
+    stream_mode: The mode of streaming updates from the graph ("updates" for incremental updates,
+                    "values" for full state after each step).
+    
+    Yields:
+    Normalized SQLAgentTraceStep dictionaries containing the node name, state update, full state,
+    and a summarized outcome of each step in the graph execution.
+    """
+    state = _clone_state(initial_state)
+    for event in graph.stream(initial_state, stream_mode=stream_mode):
+        node_name, update, state = _normalize_stream_event(event, state, stream_mode)
+        yield {
+            "node": node_name,
+            "update": update,
+            "state": _clone_state(state),
+            "outcome": _summarize_step_outcome(update),
+        }
 
 
 def build_sql_agent_graph(
