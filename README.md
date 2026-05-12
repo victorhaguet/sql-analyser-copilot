@@ -27,7 +27,16 @@ Optional:
 ```bash
 OPENAI_BASE_URL="https://your-provider.example/v1"
 SQL_COPILOT_ANALYST_MODEL="gpt-5.2"
+SQL_COPILOT_DATABASES='[
+  {
+    "name": "chinook",
+    "path": "data/Chinook_Sqlite.sqlite",
+    "description": "Music store database with artists, albums, tracks, customers, invoices, and employees."
+  }
+]'
 ```
+
+`SQL_COPILOT_DATABASES` lets the app route a question to the most relevant database before generating SQL. If none of the configured databases match the question, the app returns an error asking the user to reformulate the request more specifically.
 
 Start the API:
 

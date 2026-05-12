@@ -8,7 +8,11 @@ from typing import Any, Protocol
 from jinja2 import Environment, StrictUndefined
 
 from sql_copilot.state import SQLAgentState
-from sql_copilot.tools.database import SQLiteDatabase, get_default_database
+from sql_copilot.tools.database import (
+    SQLiteDatabase,
+    format_database_schema,
+    get_default_database,
+)
 
 # Get the prompt template for SQL generation.
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "sql_generator.j2"
@@ -121,30 +125,6 @@ def _strip_sql_fence(text: str) -> str:
     return stripped.removeprefix("sql").strip() if stripped.lower().startswith("sql\n") else stripped
 
 
-def format_database_schema(database: SQLiteDatabase) -> str:
-    """
-    Render the SQLite schema into a compact prompt-friendly string.
-    
-    Args:
-        database: The SQLiteDatabase instance to format the schema of.
-    
-    Returns:
-        A string representation of the database schema suitable for inclusion in prompts.
-    """
-    lines: list[str] = []
-
-    # For each table, list its columns and types in a compact format.
-    for table_name, columns in database.get_database_schema().items():
-        column_bits = []
-        for column in columns:
-            descriptor = f'{column["name"]} {column["type"]}'
-            if column["primary_key"]:
-                descriptor += " PRIMARY KEY"
-            column_bits.append(descriptor)
-        lines.append(f'{table_name}({", ".join(column_bits)})')
-    return "\n".join(lines)
-
-
 class SQLGeneratorNode:
     """Generate SQL from a natural-language question."""
 
@@ -181,8 +161,8 @@ class SQLGeneratorNode:
         """
         question = state["question"]
 
-        # Get the schema overview from the state or format it from the database if not present.
-        schema_overview = state.get("schema_overview") or format_database_schema(self.database)
+        selected_database = state.get("selected_database") or self.database # Use the selected database from state or fall back to the default
+        schema_overview = state.get("schema_overview") or format_database_schema(selected_database)
         prompt = _render_prompt(
             self.prompt_template,
             question=question,
