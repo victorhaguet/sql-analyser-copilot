@@ -72,6 +72,21 @@ SQL_COPILOT_API_BASE_URL="http://127.0.0.1:8000"
 
 Note: `langchain-openai` targets the official OpenAI API. A custom `OPENAI_BASE_URL` can work for compatible endpoints, but some third-party providers may require a provider-specific LangChain package.
 
+## Makefile Commands
+
+A Makefile file has been created to easily control and use the repo. All of the following commands can be used. 
+
+```bash
+make env        # Create venv and install dependencies
+make install    # Reinstall dependencies in existing venv
+make test       # Run unit tests
+make coverage   # Run tests with coverage report
+make api        # Start FastAPI (port 8000)
+make ui         # Start Streamlit UI (port 8501)
+make docker-up  # Build and start Docker containers
+make docker-down # Stop Docker containers
+```
+
 ## Run with Docker
 
 ### Prerequisites
