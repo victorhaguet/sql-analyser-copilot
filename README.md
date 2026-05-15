@@ -71,3 +71,45 @@ SQL_COPILOT_API_BASE_URL="http://127.0.0.1:8000"
 ```
 
 Note: `langchain-openai` targets the official OpenAI API. A custom `OPENAI_BASE_URL` can work for compatible endpoints, but some third-party providers may require a provider-specific LangChain package.
+
+## Run with Docker
+
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) installed
+- [Docker Compose](https://docs.docker.com/compose/install/) installed
+
+### Quick start
+
+```bash
+docker compose up --build
+```
+
+Open the Streamlit UI at [http://localhost:8501](http://localhost:8501).
+
+### Configuration
+
+Copy the environment file and set your API keys:
+
+```bash
+cp .env.example .env
+# Edit .env with your OPENAI_API_KEY and other settings
+```
+
+### Services
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| Frontend | http://localhost:8501 | Streamlit UI |
+| Backend | http://localhost:8000 | FastAPI REST API |
+| Health | http://localhost:8000/health | Health check endpoint |
+
+### Updating database files
+
+Database files are mounted from the host's `data/` directory at runtime. To use different databases, place SQLite files in `data/` and update `SQL_COPILOT_DATABASES` in your `.env` file.
+
+### Stopping
+
+```bash
+docker-compose down
+```
