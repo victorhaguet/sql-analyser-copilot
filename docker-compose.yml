@@ -1,0 +1,40 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/src/data
+      - ./logs:/app/src/logs
+    env_file:
+      - .env
+    networks:
+      - sql-analyser-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/src/data
+    env_file:
+      - .env
+    environment:
+      - SQL_COPILOT_API_BASE_URL=http://backend:8000
+    networks:
+      - sql-analyser-net
+    depends_on:
+      - backend
+
+networks:
+  sql-analyser-net:
+    driver: bridge
