@@ -36,4 +36,4 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build network image target
-        run: docker compose docker-compose.yml --build
+        run: docker compose -f docker-compose.yml build
