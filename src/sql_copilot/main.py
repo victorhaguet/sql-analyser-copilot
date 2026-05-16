@@ -228,14 +228,18 @@ def _run_question_with_trace(
     question: str,
     graph: Any,
     trace_log_dir: str | Path | None,
-) -> tuple[SQLAgentState, list[SQLAgentTraceStep], Path]:
-    """Run the graph once, collecting the trace and persisting it to disk."""
+    write_log: bool = True,
+) -> tuple[SQLAgentState, list[SQLAgentTraceStep], Path | None]:
+    """Run the graph once, collecting the trace and optionally persisting it to disk."""
     trace = list(stream_sql_agent_execution(graph, {"question": question}))
     result: SQLAgentState = trace[-1]["state"] if trace else {"question": question}
-    log_path = _write_trace_log(question, trace, trace_log_dir)
-    metadata = dict(result.get("metadata") or {})
-    metadata["trace_log_path"] = str(log_path)
-    result["metadata"] = metadata
+    if write_log: # If write_log is True, persist the trace log and attach the path to the result metadata
+        log_path = _write_trace_log(question, trace, trace_log_dir)
+        metadata = dict(result.get("metadata") or {})
+        metadata["trace_log_path"] = str(log_path)
+        result["metadata"] = metadata
+    else:
+        log_path = None
     return result, trace, log_path
 
 
@@ -320,13 +324,14 @@ def answer_question(
         validator=validator,
         execution_limit=execution_limit,
     )
-    result, trace, _log_path = _run_question_with_trace(question, graph, trace_log_dir)
-    if not include_trace:
+    if include_trace: # If trace is requested, run with trace collection and log persistence
+        result, trace, _log_path = _run_question_with_trace(question, graph, trace_log_dir, write_log=True)
+        metadata = dict(result.get("metadata") or {})
+        metadata["execution_trace"] = trace
+        result["metadata"] = metadata
         return result
 
-    metadata = dict(result.get("metadata") or {})
-    metadata["execution_trace"] = trace
-    result["metadata"] = metadata
+    result = graph.invoke({"question": question})
     return result
 
 
