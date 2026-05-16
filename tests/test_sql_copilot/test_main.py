@@ -156,7 +156,7 @@ class MainTestCase(unittest.TestCase):
             self.assertTrue(Path(result["metadata"]["trace_log_path"]).exists())
 
     def test_answer_question_creates_trace_log_file(self) -> None:
-        """Each run should create a persisted trace log file."""
+        """Each run with include_trace=True should create a persisted trace log file."""
         from sql_copilot.main import answer_question
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -167,6 +167,7 @@ class MainTestCase(unittest.TestCase):
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
                 databases=[register_database(SQLiteDatabase())],
+                include_trace=True,
                 trace_log_dir=temp_dir,
             )
 
