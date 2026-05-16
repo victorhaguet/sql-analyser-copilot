@@ -1,4 +1,9 @@
 # sql-analyser-copilot
+
+## Try It Now
+
+Live demo: https://sql-analyser-copilot-ywij9amvcnpzon78fqkt3z.streamlit.app/
+
 SQL Analyser Copilot is an AI-powered data assistant that translates natural language queries into SQL, executes them on a relational database, and returns structured results along with business-level insights.
 
 ## Run with an OpenAI model via LangChain
@@ -71,6 +76,13 @@ SQL_COPILOT_API_BASE_URL="http://127.0.0.1:8000"
 ```
 
 Note: `langchain-openai` targets the official OpenAI API. A custom `OPENAI_BASE_URL` can work for compatible endpoints, but some third-party providers may require a provider-specific LangChain package.
+
+## Continuous Integration
+
+The CI pipeline (`.github/workflows/ci.yaml`) runs on every push to `main` and on all pull requests. It performs two jobs:
+
+- **Python Tests**: Installs dependencies via `make install` and runs `make coverage` to execute tests with a coverage report.
+- **Docker Build**: Builds the Docker image using `docker compose -f docker-compose.yml build`.
 
 ## Makefile Commands
 
