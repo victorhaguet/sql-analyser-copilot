@@ -1,11 +1,5 @@
 # sql-analyser-copilot
 
-## Try It Now
-
-Live demo: https://sql-analyser-copilot-ywij9amvcnpzon78fqkt3z.streamlit.app/
-
-SQL Analyser Copilot is an AI-powered data assistant that translates natural language queries into SQL, executes them on a relational database, and returns structured results along with business-level insights.
-
 ## Run with an OpenAI model via LangChain
 
 Install dependencies:
