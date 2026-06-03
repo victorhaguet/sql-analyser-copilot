@@ -107,6 +107,13 @@ div[data-testid="stButton"] > button {
     line-height: 1.25;
 }
 
+/* Danger delete buttons in user management */
+[class*="st-key-danger-delete-"] div[data-testid="stButton"] > button {
+    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+    color: #b91c1c;
+    border-color: rgba(185, 28, 28, 0.4);
+}
+
 /* Primary submit button styles */
 div[data-testid="stFormSubmitButton"] > button {
     background: linear-gradient(135deg, #0f766e 0%, #155e75 100%);
@@ -120,6 +127,11 @@ div[data-testid="stFormSubmitButton"] > button {
 /* Input and textarea styles */
 div[data-testid="stTextArea"] textarea {
     border-radius: 16px;
+}
+
+/* Hide Streamlit's input instruction text such as "Press Enter to apply" */
+[data-testid="InputInstructions"] {
+    display: none;
 }
 
 /* Tab styles */
