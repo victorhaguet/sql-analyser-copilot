@@ -19,7 +19,7 @@ dependencies = [
     "streamlit>=1.45,<2.0",
     "uvicorn>=0.30,<1.0",
     "coverage==7.14.0",
-    "passlib>=1.7,<2.0",
+    "passlib[argon2]>=1.7,<2.0",
 ]
 
 [tool.setuptools]
