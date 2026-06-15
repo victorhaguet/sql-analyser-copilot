@@ -64,9 +64,9 @@ def _normalize_model_decision(raw_text: str) -> dict[str, Any]:
     try:
         decision = json.loads(cleaned) # Load the selector model's output
     except json.JSONDecodeError:
-        return {"match": False, "database": "", "reason": "The router returned an invalid selection payload."}
+        return {"match": False, "database": "", "candidate_databases": [], "reason": "The router returned an invalid selection payload."}
     if not isinstance(decision, dict):
-        return {"match": False, "database": "", "reason": "The router returned an invalid selection payload."}
+        return {"match": False, "database": "", "candidate_databases": [], "reason": "The router returned an invalid selection payload."}
     return {
         "match": bool(decision.get("match")),
         "database": str(decision.get("database") or "").strip(),

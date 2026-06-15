@@ -103,8 +103,8 @@ def create_user(
         user = _row_to_user(conn.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone())
 
         # Make sure user isn't None
-        if user is None:
-            raise RuntimeError("User could not be created.")
+        if user is None:  # pragma: no cover
+            raise RuntimeError("User could not be created.")  # pragma: no cover
         
         return user
     finally:
@@ -172,8 +172,8 @@ def list_users() -> list[dict[str, Any]]:
             user = _row_to_user(row, include_hash=False)
 
             # Make sure user isn't None
-            if user is None:
-                raise RuntimeError("User could not be created.")
+            if user is None:  # pragma: no cover
+                raise RuntimeError("User could not be created.")  # pragma: no cover
             
             l_users.append(user)
         
@@ -263,9 +263,9 @@ def delete_user(sub: str) -> bool:
 
     # Delete the user of the database
     try:
-        conn.execute("DELETE FROM users WHERE sub = ?", (sub,))
+        cursor = conn.execute("DELETE FROM users WHERE sub = ?", (sub,))
         conn.commit()
-        return True
+        return cursor.rowcount > 0
     finally:
         conn.close()
 
