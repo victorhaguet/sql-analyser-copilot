@@ -88,6 +88,37 @@ class DatabaseSelectorNodeTestCase(unittest.TestCase):
         result = node({"question": "What will the weather be tomorrow?"})
         self.assertIn("This question is unrelated to the catalog.", result["execution_error"])
 
+    def test_selector_handles_json_code_block_format(self) -> None:
+        """Selector should parse JSON wrapped in markdown code blocks."""
+        node = DatabaseSelectorNode(
+            [register_database(SQLiteDatabase(), name="music", description="Music data")],
+            model=FakeModel(
+                '```json\n{"match": true, "database": "music", "candidate_databases": ["music"], "reason": "Match found"}\n```'
+            ),
+        )
+        result = node({"question": "Show artists"})
+        self.assertEqual(result["metadata"]["selected_database"], "music")
+
+    def test_selector_handles_json_with_leading_label(self) -> None:
+        """Selector should strip 'json' prefix from code blocks."""
+        node = DatabaseSelectorNode(
+            [register_database(SQLiteDatabase(), name="music", description="Music data")],
+            model=FakeModel(
+                '```json\n{"match": true, "database": "music", "candidate_databases": ["music"], "reason": "Match"}\n```'
+            ),
+        )
+        result = node({"question": "Show artists"})
+        self.assertEqual(result["metadata"]["selected_database"], "music")
+
+    def test_selector_returns_error_for_invalid_json(self) -> None:
+        """Selector should handle invalid JSON response gracefully."""
+        node = DatabaseSelectorNode(
+            [register_database(SQLiteDatabase(), name="music", description="Music data")],
+            model=FakeModel("this is not valid json"),
+        )
+        result = node({"question": "Show artists"})
+        self.assertIn("invalid selection payload", result["execution_error"])
+
 
 if __name__ == "__main__":
     unittest.main()

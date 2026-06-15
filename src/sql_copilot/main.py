@@ -11,11 +11,25 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# Import authentification functions
+from sql_copilot.auth import (
+    create_user,
+    ensure_admin_exists,
+    get_user_by_sub,
+    get_user_by_username,
+    hash_password,
+    list_users,
+    update_user,
+    verify_password,
+    delete_user
+)
+
+# Import graph functions
 from sql_copilot.graph import SQLAgentTraceStep, build_sql_agent_graph, stream_sql_agent_execution
 from sql_copilot.llms import load_models_from_env
 from sql_copilot.nodes.sql_generator import TextModel
@@ -38,12 +52,48 @@ HTTP_503_SERVICE_UNAVAILABLE = 503
 TRACE_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 TRACE_HEADER_WIDTH = 80
 
+# Create classes
 class QueryRequest(BaseModel):
     """Incoming payload for SQL copilot queries."""
 
     question: str = Field(min_length=1)
     execution_limit: int = Field(default=200, gt=0)
-    selected_databases: list[str] | None = None # Optional list of database names to select for this query, or None to allow all databases in the catalog
+    selected_databases: list[str] | None = None
+
+
+class LoginRequest(BaseModel):
+    """Login credentials."""
+
+    username: str
+    password: str
+
+
+class UserCreate(BaseModel):
+    """Payload for creating a new user."""
+
+    username: str
+    password: str
+    name: str | None = None
+    role: str = "readonly"
+
+
+class UserUpdate(BaseModel):
+    """Payload for updating a user."""
+
+    name: str | None = None
+    role: str | None = None
+    is_active: bool | None = None
+
+
+class UserResponse(BaseModel):
+    """Public user representation (no password)."""
+
+    sub: str
+    username: str
+    name: str | None
+    role: str
+    is_active: bool
+    created_at: str
 
 
 class QueryResultPayload(BaseModel):
@@ -446,6 +496,9 @@ def create_app(
             "FastAPI is not installed. Install project dependencies before creating the API app."
         )
 
+    # Before creating the app, make sure one admin exist
+    ensure_admin_exists()
+
     fastapi_app = FastAPI(title="SQL Analyser Copilot", version="0.1.0")
     fastapi_app.state.sql_generator_model = sql_generator_model
     fastapi_app.state.analyst_model = analyst_model
@@ -459,9 +512,253 @@ def create_app(
         """Simple liveness endpoint."""
         return {"status": "ok"}
 
+    @fastapi_app.post("/auth/login")
+    def login(payload: LoginRequest) -> UserResponse:
+        """Identifiate a user and return his or her profile
+
+        Args:
+            payload (LoginRequest): User information
+
+        Raises:
+            HTTPException: If user value is missing
+            HTTPException: If the password doesn't correspond
+            HTTPException: If the user is unactive
+
+        Returns:
+            UserResponse: User information
+        """
+        # Get the username and password
+        user = get_user_by_username(payload.username)
+
+        # Check if the user exist and can access the app
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        if not verify_password(payload.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        if not user["is_active"]:
+            raise HTTPException(status_code=403, detail="Account is disabled")
+        
+        # If yes, return the user info
+        return UserResponse(
+            sub=user["sub"],
+            username=user["username"],
+            name=user["name"],
+            role=user["role"],
+            is_active=user["is_active"],
+            created_at=user["created_at"],
+        )
+
+    @fastapi_app.get("/auth/me")
+    def get_me(x_user_sub: str = Header(...)) -> UserResponse:
+        """Return the current authentificated profile
+
+        Args:
+            x_user_sub (str, optional): User. Defaults to Header(...).
+
+        Raises:
+            HTTPException: If the user doesn't correspond
+            HTTPException: If the user is unactive
+
+        Returns:
+            UserResponse: User information
+        """
+        # Get the user 
+        user = get_user_by_sub(x_user_sub)
+
+        # If the user doesn't exist or is unactive
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        if not user["is_active"]:
+            raise HTTPException(status_code=403, detail="Account is disabled")
+        
+        # return the user information
+        return UserResponse(
+            sub=user["sub"],
+            username=user["username"],
+            name=user["name"],
+            role=user["role"],
+            is_active=user["is_active"],
+            created_at=user["created_at"],
+        )
+
+    @fastapi_app.post("/auth/users")
+    def register_user(
+        payload: UserCreate,
+        x_user_role: str = Header(...),
+    ) -> UserResponse:
+        """Create a new user. Only admins can use this feature.
+
+        Args:
+            payload (UserCreate): Payload of the new user to create
+            x_user_sub (str, optional): Admin information. Defaults to Header(...).
+            x_user_role (str, optional): Admin role. Defaults to Header(...).
+
+        Raises:
+            HTTPException: If the current user isn't an admin, raise an error
+            HTTPException: Check the role of the new user exist
+            HTTPException: Raise an error if the user couldn't be created
+
+        Returns:
+            UserResponse: _description_
+        """
+        # If the current user isn't an admin, raise an error
+        if x_user_role != "admin":
+            raise HTTPException(status_code=403, detail="Admin access required")
+        # CHeck if the new user have one of the allowed role
+        if payload.role not in {"admin", "editor", "readonly"}:
+            raise HTTPException(status_code=400, detail="Invalid role")
+        try:
+            # Create the new user
+            user = create_user(
+                username=payload.username,
+                password_hash=hash_password(payload.password),
+                name=payload.name,
+                role=payload.role,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        
+        # Return user infos
+        return UserResponse(
+            sub=user["sub"],
+            username=user["username"],
+            name=user["name"],
+            role=user["role"],
+            is_active=user["is_active"],
+            created_at=user["created_at"],
+        )
+
+    @fastapi_app.get("/auth/users")
+    def get_users(
+        x_user_role: str = Header(...),
+    ) -> list[UserResponse]:
+        """List all users
+
+        Args:
+            x_user_role (str, optional): Current user role. Defaults to Header(...).
+
+        Raises:
+            HTTPException: If the user isn't an admin, raise error
+
+        Returns:
+            list[UserResponse]: List of all the users
+        """
+        # Check if the current user is an admin
+        if x_user_role != "admin":
+            raise HTTPException(status_code=403, detail="Admin access required")
+        users = list_users()
+
+        # Return the list of users.
+        return [
+            UserResponse(
+                sub=u["sub"],
+                username=u["username"],
+                name=u["name"],
+                role=u["role"],
+                is_active=u["is_active"],
+                created_at=u["created_at"],
+            )
+            for u in users
+        ]
+
+    @fastapi_app.put("/auth/users/{sub}")
+    def update_user_endpoint(
+        sub: str,
+        payload: UserUpdate,
+        x_user_role: str = Header(...),
+    ) -> UserResponse:
+        """Update a user role or status
+
+        Args:
+            sub (str): ID of the user to update
+            payload (UserUpdate): Information to update
+            x_user_role (str, optional): Role of the current user. Defaults to Header(...).
+
+        Raises:
+            HTTPException: If the current user isn't an admin, raise an error
+            HTTPException: If the role doesn't existe, raise an error
+            HTTPException: If the update doesn't work, raise an error
+
+        Returns:
+            UserResponse: Information of the updated user
+        """
+        # Check if the command is called by an admin
+        if x_user_role != "admin":
+            raise HTTPException(status_code=403, detail="Admin access required")
+        
+        # Check if the role correspond to an existing role
+        if payload.role is not None and payload.role not in {"admin", "editor", "readonly"}:
+            raise HTTPException(status_code=400, detail="Invalid role")
+        
+        # Update the user information
+        user = update_user(sub, name=payload.name, role=payload.role, is_active=payload.is_active)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # User information
+        return UserResponse(
+            sub=user["sub"],
+            username=user["username"],
+            name=user["name"],
+            role=user["role"],
+            is_active=user["is_active"],
+            created_at=user["created_at"],
+        )
+
+    @fastapi_app.delete("/auth/users/{sub}")
+    def delete_user_endpoint(
+        sub: str,
+        x_user_role: str = Header(...),
+    ) -> dict[str, str]:
+        """Delete a user account
+
+        Args:
+            sub (str): Id of the account to delete
+            x_user_role (str, optional): Role of the current user. Defaults to Header(...).
+
+        Raises:
+            HTTPException: If the current user isn't an admin, raise error
+            HTTPException: If the account that will be deleted doesn't exist, raise an error
+
+        Returns:
+            dict[str, str]: Return a validation directory
+        """
+        # Chekc if it is an admin that call the function
+        if x_user_role != "admin":
+            raise HTTPException(status_code=403, detail="Admin access required")
+        # Delete the accound
+        deleted = delete_user(sub)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="User not found")
+        return {"status": "ok"}
+
     @fastapi_app.post("/query", response_model=QueryResponse)
-    def query(payload: QueryRequest) -> QueryResponse:
-        """Run the SQL copilot graph for a single natural-language question."""
+    def query(
+        payload: QueryRequest,
+        x_user_sub: str = Header(...),
+    ) -> QueryResponse:
+        """Send a request to the graph
+
+        Args:
+            payload (QueryRequest): Query request payload
+            x_user_sub (str, optional): User that send the request. Defaults to Header(...).
+
+        Raises:
+            HTTPException: If the user doesn't exist, raise an error
+            HTTPException: If the user isn't active, raise an error
+            HTTPException: Raise an error if the model isn't configured
+            HTTPException: Raise an error if the query didn't run correctly
+
+        Returns:
+            QueryResponse: _description_
+        """
+        # CHeck if the user cna send a request
+        user = get_user_by_sub(x_user_sub)
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        if not user["is_active"]:
+            raise HTTPException(status_code=403, detail="Account is disabled")
+
         if fastapi_app.state.sql_generator_model is None:
             raise HTTPException(
                 status_code=HTTP_503_SERVICE_UNAVAILABLE,
@@ -472,7 +769,6 @@ def create_app(
             )
 
         try:
-            # Select the subset of databases to use
             databases = _select_requested_databases(
                 payload.selected_databases,
                 fastapi_app.state.databases,
@@ -482,7 +778,7 @@ def create_app(
                 sql_generator_model=fastapi_app.state.sql_generator_model,
                 analyst_model=fastapi_app.state.analyst_model,
                 selector_model=fastapi_app.state.selector_model,
-                databases=databases, # Use the filtered database list for this query
+                databases=databases,
                 validator=fastapi_app.state.validator,
                 execution_limit=payload.execution_limit,
             )

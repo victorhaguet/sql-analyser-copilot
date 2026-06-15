@@ -11,7 +11,7 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
-from sql_copilot.llms.openai_compatible import OpenAICompatibleResponsesModel
+from sql_copilot.llms.openai_compatible import OpenAICompatibleResponsesModel, load_models_from_env
 
 class FakeClient:
     """Simple fake LangChain client."""
@@ -58,3 +58,16 @@ class OpenAICompatibleResponsesModelTestCase(unittest.TestCase):
             client.calls[0],
             [("system", "Return SQL only."), ("human", "List artists")],
         )
+
+    def test_load_models_from_env_returns_none_when_no_api_key(self) -> None:
+        """When OPENAI_API_KEY is not set, models should not be created."""
+        import os
+        original_key = os.getenv("OPENAI_API_KEY")
+        try:
+            os.environ.pop("OPENAI_API_KEY", None)
+            generator, analyst = load_models_from_env()
+            self.assertIsNone(generator)
+            self.assertIsNone(analyst)
+        finally:
+            if original_key is not None:
+                os.environ["OPENAI_API_KEY"] = original_key
