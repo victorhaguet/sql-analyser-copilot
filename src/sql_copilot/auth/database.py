@@ -63,7 +63,7 @@ def create_user(
     password_hash: str,
     name: str | None = None,
     role: str = _ROLE_READONLY,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     """Create a new user
 
     Args:
@@ -99,7 +99,14 @@ def create_user(
             (sub, username, name, password_hash, role, now),
         )
         conn.commit()
-        return _row_to_user(conn.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone())
+
+        user = _row_to_user(conn.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone())
+
+        # Make sure user isn't None
+        if user is None:
+            raise RuntimeError("User could not be created.")
+        
+        return user
     finally:
         conn.close()
 
@@ -146,7 +153,7 @@ def get_user_by_sub(sub: str) -> dict[str, Any] | None:
         conn.close()
 
 
-def list_users() -> list[dict[str, Any]] | None:
+def list_users() -> list[dict[str, Any]]:
     """List all the users of the table
 
     Returns:
@@ -155,11 +162,22 @@ def list_users() -> list[dict[str, Any]] | None:
     # Initiaize the SQL table (if it doesn't exist) and connect to it
     init_user_db()
     conn = _get_connection()
+    l_users: list[dict[str, Any]] = [] # Empty list of users
 
     # List all the users of the table
     try:
         rows = conn.execute("SELECT * FROM users ORDER BY created_at").fetchall()
-        return [_row_to_user(row, include_hash=False) for row in rows] # type:ignore
+
+        for row in rows:
+            user = _row_to_user(row, include_hash=False)
+
+            # Make sure user isn't None
+            if user is None:
+                raise RuntimeError("User could not be created.")
+            
+            l_users.append(user)
+        
+        return l_users
     finally:
         conn.close()
 
