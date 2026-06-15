@@ -127,6 +127,18 @@ class SQLSafetyValidatorTestCase(unittest.TestCase):
         with self.assertRaises(InvalidQueryError):
             self.validator.validate_select("SELECT FROM Artist")
 
+    def test_multiline_comment_is_properly_masked(self) -> None:
+        """Test that multi-line comments /* */ are properly masked and don't trigger keyword errors."""
+        normalized = self.validator.assert_safe_select(
+            """
+            SELECT Name
+            /* This is a
+               multi-line comment */
+            FROM Artist
+            """
+        )
+        self.assertIn("SELECT", normalized)
+
     def test_unknown_table_is_rejected(self) -> None:
         """Test that a query referencing an unknown table is rejected."""
         with self.assertRaises(InvalidQueryError):

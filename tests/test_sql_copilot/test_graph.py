@@ -15,6 +15,167 @@ for parent in Path(__file__).resolve().parents:
 from sql_copilot.tools.database import SQLiteDatabase, register_database
 
 
+class TestNormalizeStreamEvent(unittest.TestCase):
+    """Test the _normalize_stream_event function."""
+
+    def setUp(self) -> None:
+        import sql_copilot.graph as graph_module
+        self._original_modules = {
+            name: sys.modules.get(name)
+            for name in ("langgraph", "langgraph.graph")
+        }
+        langgraph_module = types.ModuleType("langgraph")
+        graph_module = types.ModuleType("langgraph.graph")
+        setattr(graph_module, "START", "__start__")
+        setattr(graph_module, "END", "__end__")
+        setattr(graph_module, "StateGraph", FakeStateGraph)
+        sys.modules["langgraph"] = langgraph_module
+        sys.modules["langgraph.graph"] = graph_module
+
+    def tearDown(self) -> None:
+        for name, module in self._original_modules.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+    def test_normalize_stream_event_with_updates_mode(self) -> None:
+        """Test normalization in updates stream mode."""
+        from sql_copilot.graph import _normalize_stream_event
+
+        event = {"node1": {"key": "value"}}
+        current_state = {"question": "test"}
+        node_name, update, merged_state = _normalize_stream_event(
+            event, current_state, "updates"
+        )
+        self.assertEqual(node_name, "node1")
+        self.assertEqual(update, {"key": "value"})
+
+    def test_normalize_stream_event_with_values_mode(self) -> None:
+        """Test normalization in values stream mode."""
+        from sql_copilot.graph import _normalize_stream_event
+
+        event = {"node1": {"key": "value"}}
+        current_state = {"question": "test"}
+        node_name, update, merged_state = _normalize_stream_event(
+            event, current_state, "values"
+        )
+        self.assertEqual(node_name, "state")
+
+    def test_normalize_stream_event_raises_type_error_for_invalid_updates(self) -> None:
+        """Test that invalid updates raise TypeError."""
+        from sql_copilot.graph import _normalize_stream_event
+
+        event = "invalid"
+        current_state = {"question": "test"}
+
+        with self.assertRaises(TypeError):
+            _normalize_stream_event(event, current_state, "updates")
+
+    def test_normalize_stream_event_raises_type_error_for_invalid_values(self) -> None:
+        """Test that invalid values raise TypeError."""
+        from sql_copilot.graph import _normalize_stream_event
+
+        event = ["invalid"]
+        current_state = {"question": "test"}
+
+        with self.assertRaises(TypeError):
+            _normalize_stream_event(event, current_state, "values")
+
+    def test_normalize_stream_event_raises_type_error_for_non_string_node_name(self) -> None:
+        """Test that non-string node names raise TypeError."""
+        from sql_copilot.graph import _normalize_stream_event
+
+        event = {123: {"key": "value"}}
+        current_state = {"question": "test"}
+
+        with self.assertRaises(TypeError):
+            _normalize_stream_event(event, current_state, "updates")
+
+    def test_normalize_stream_event_raises_type_error_for_non_dict_update(self) -> None:
+        """Test that non-dict updates raise TypeError."""
+        from sql_copilot.graph import _normalize_stream_event
+
+        event = {"node1": "not-a-dict"}
+        current_state = {"question": "test"}
+
+        with self.assertRaises(TypeError):
+            _normalize_stream_event(event, current_state, "updates")
+
+
+class TestSummarizeStepOutcome(unittest.TestCase):
+    """Test the _summarize_step_outcome function."""
+
+    def test_summarize_validation_failed(self) -> None:
+        """Test summarization when SQL validation fails."""
+        from sql_copilot.graph import _summarize_step_outcome
+
+        result = _summarize_step_outcome({"sql_validation_error": "syntax error"})
+        self.assertEqual(result, "validation_failed")
+
+    def test_summarize_execution_failed(self) -> None:
+        """Test summarization when execution fails."""
+        from sql_copilot.graph import _summarize_step_outcome
+
+        result = _summarize_step_outcome({"execution_error": "error"})
+        self.assertEqual(result, "execution_failed")
+
+    def test_summarize_database_selection_ambiguous(self) -> None:
+        """Test summarization when database selection is ambiguous."""
+        from sql_copilot.graph import _summarize_step_outcome
+
+        result = _summarize_step_outcome({
+            "execution_error": "error",
+            "metadata": {"database_selection_ambiguous": True},
+        })
+        self.assertEqual(result, "database_selection_ambiguous")
+
+    def test_summarize_database_selection_failed(self) -> None:
+        """Test summarization when database selection fails."""
+        from sql_copilot.graph import _summarize_step_outcome
+
+        result = _summarize_step_outcome({
+            "execution_error": "error",
+            "metadata": {"database_selection_failed": True},
+        })
+        self.assertEqual(result, "database_selection_failed")
+
+    def test_summarize_query_executed(self) -> None:
+        """Test summarization when query is executed."""
+        from sql_copilot.graph import _summarize_step_outcome
+
+        result = _summarize_step_outcome({"query_result": {}})
+        self.assertEqual(result, "query_executed")
+
+    def test_summarize_analysis_ready(self) -> None:
+        """Test summarization when analysis is ready."""
+        from sql_copilot.graph import _summarize_step_outcome
+
+        result = _summarize_step_outcome({"analysis": "result"})
+        self.assertEqual(result, "analysis_ready")
+
+    def test_summarize_sql_generated(self) -> None:
+        """Test summarization when SQL is generated."""
+        from sql_copilot.graph import _summarize_step_outcome
+
+        result = _summarize_step_outcome({"generated_sql": "SELECT * FROM t"})
+        self.assertEqual(result, "sql_generated")
+
+    def test_summarize_database_selected(self) -> None:
+        """Test summarization when database is selected."""
+        from sql_copilot.graph import _summarize_step_outcome
+
+        result = _summarize_step_outcome({"selected_database": "db1"})
+        self.assertEqual(result, "database_selected")
+
+    def test_summarize_updated(self) -> None:
+        """Test summarization for default case."""
+        from sql_copilot.graph import _summarize_step_outcome
+
+        result = _summarize_step_outcome({"metadata": {}})
+        self.assertEqual(result, "updated")
+
+
 class FakeResponse:
     """Simple model response object with a content field."""
 

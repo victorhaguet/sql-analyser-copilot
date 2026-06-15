@@ -11,7 +11,11 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
-from sql_copilot.streamlit_ui import build_display_context, build_display_payload
+from sql_copilot.streamlit_ui import (
+    build_display_context,
+    build_display_payload,
+    load_stylesheet,
+)
 
 
 class StreamlitUITestCase(unittest.TestCase):
@@ -97,6 +101,12 @@ class StreamlitUITestCase(unittest.TestCase):
         self.assertEqual(original_query, "Show me 1 artist")
         self.assertEqual(sql_query, "SELECT Name FROM Artist LIMIT 1")
         self.assertEqual(ai_answer, "No analysis returned.")
+
+    def test_load_stylesheet_returns_content(self) -> None:
+        """Test that the stylesheet is loaded and has content."""
+        content = load_stylesheet()
+        self.assertIsInstance(content, str)
+        self.assertGreater(len(content), 0)
 
 
 if __name__ == "__main__":
