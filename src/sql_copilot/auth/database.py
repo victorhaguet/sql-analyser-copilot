@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, overload
 from uuid import uuid4
 
 _USERS_DIR = Path(__file__).resolve().parents[3] / ".users"
@@ -16,32 +17,41 @@ _ROLE_READONLY = "readonly"
 
 
 def _ensure_users_dir() -> None:
-    """Make sure the user database exist
-    """
+    """Ensure the users directory exists."""
     _USERS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _get_connection() -> sqlite3.Connection:
-    """Connect to the database if it exist
+    """Create a database connection.
 
     Returns:
-        sqlite3.Connection: _description_
+        sqlite3.Connection: Database connection with row factory set.
     """
-    # Check the user database exist
     _ensure_users_dir()
-
-    # Connect to the user database
     conn = sqlite3.connect(_USERS_DB)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def init_user_db() -> None:
-    """Initialize the SQL table (if needed)"""
-    # Connect to the user database
+@contextmanager
+def _db_connection() -> Iterator[sqlite3.Connection]:
+    """Context manager for database connections.
+
+    Yields:
+        sqlite3.Connection: Database connection that will be closed automatically.
+    """
     conn = _get_connection()
     try:
-        # Initialize the user table if it doesn't already exist
+        yield conn
+    finally:
+        conn.close()
+
+
+def init_user_db() -> None:
+    """Initialize the SQL table (if needed)"""
+    conn = _get_connection()
+
+    try:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS users (
                 sub TEXT PRIMARY KEY,
@@ -64,36 +74,30 @@ def create_user(
     name: str | None = None,
     role: str = _ROLE_READONLY,
 ) -> dict[str, Any]:
-    """Create a new user
+    """Create a new user.
 
     Args:
-        username (str): username of the user
-        password_hash (str): encoded password
-        name (str | None, optional): name in the app of the user. Defaults to None.
-        role (str, optional): Role of the user. Defaults to _ROLE_READONLY.
+        username: Username of the user.
+        password_hash: Encoded password.
+        name: Name in the app of the user. Defaults to None.
+        role: Role of the user. Defaults to _ROLE_READONLY.
 
     Raises:
-        ValueError: raise an error if the user already exist
+        ValueError: If the user already exists.
 
     Returns:
-        dict[str, Any]: Return a dictionnary of the created user information.
+        Dictionary of the created user information.
     """
-    # Initiaize the SQL table (if it doesn't exist) and connect to it
     init_user_db()
-    conn = _get_connection()
-
-
-    try:
-        # Check if the user already exist in the table
+    with _db_connection() as conn:
         existing = conn.execute(
             "SELECT sub FROM users WHERE username = ?", (username,)
         ).fetchone()
         if existing:
             raise ValueError(f"Username '{username}' already exists")
 
-        # Insert the new user
-        sub = str(uuid4()) # Create an ID
-        now = datetime.utcnow().isoformat() # Get the current time
+        sub = str(uuid4())
+        now = datetime.utcnow().isoformat()
         conn.execute(
             "INSERT INTO users (sub, username, name, password_hash, role, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
             (sub, username, name, password_hash, role, now),
@@ -101,85 +105,55 @@ def create_user(
         conn.commit()
 
         user = _row_to_user(conn.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone())
-
-        # Make sure user isn't None
-        if user is None:  # pragma: no cover
-            raise RuntimeError("User could not be created.")  # pragma: no cover
-        
+        if user is None:
+            raise RuntimeError("User could not be created.")
         return user
-    finally:
-        conn.close()
 
 
 def get_user_by_username(username: str) -> dict[str, Any] | None:
-    """_summary_
+    """Get user by username.
 
     Args:
-        username (str): username
+        username: Username to look up.
 
     Returns:
-        dict[str, Any] | None: user information
+        User information dictionary or None if not found.
     """
-    # Initiaize the SQL table (if it doesn't exist) and connect to it
     init_user_db()
-    conn = _get_connection()
-
-    # Get the user information from its username
-    try:
+    with _db_connection() as conn:
         row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         return _row_to_user(row) if row else None
-    finally:
-        conn.close()
 
 
 def get_user_by_sub(sub: str) -> dict[str, Any] | None:
-    """Get the user info using its ID
+    """Get user by ID.
 
     Args:
-        sub (str): ID
+        sub: User ID.
 
     Returns:
-        dict[str, Any] | None: user information
+        User information dictionary or None if not found.
     """
-    # Initiaize the SQL table (if it doesn't exist) and connect to it
     init_user_db()
-    conn = _get_connection()
-
-    # Get the user information from its ID
-    try:
+    with _db_connection() as conn:
         row = conn.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone()
         return _row_to_user(row) if row else None
-    finally:
-        conn.close()
 
 
 def list_users() -> list[dict[str, Any]]:
-    """List all the users of the table
+    """List all users.
 
     Returns:
-        list[dict[str, Any]]: _description_
+        List of user information dictionaries (without password hashes).
     """
-    # Initiaize the SQL table (if it doesn't exist) and connect to it
     init_user_db()
-    conn = _get_connection()
-    l_users: list[dict[str, Any]] = [] # Empty list of users
-
-    # List all the users of the table
-    try:
+    with _db_connection() as conn:
         rows = conn.execute("SELECT * FROM users ORDER BY created_at").fetchall()
-
-        for row in rows:
-            user = _row_to_user(row, include_hash=False)
-
-            # Make sure user isn't None
-            if user is None:  # pragma: no cover
-                raise RuntimeError("User could not be created.")  # pragma: no cover
-            
-            l_users.append(user)
-        
-        return l_users
-    finally:
-        conn.close()
+        return [
+            _row_to_user(row, include_hash=False)
+            for row in rows
+            if row is not None
+        ]
 
 
 def update_user(
@@ -188,28 +162,23 @@ def update_user(
     role: str | None = None,
     is_active: bool | None = None,
 ) -> dict[str, Any] | None:
-    """_summary_
+    """Update user information.
 
     Args:
-        sub (str): _description_
-        name (str | None, optional): _description_. Defaults to None.
-        role (str | None, optional): _description_. Defaults to None.
-        is_active (bool | None, optional): _description_. Defaults to None.
+        sub: User ID.
+        name: New name. Defaults to None.
+        role: New role. Defaults to None.
+        is_active: New active status. Defaults to None.
 
     Returns:
-        dict[str, Any] | None: _description_
+        Updated user information or None if user not found.
     """
-    # Initiaize the SQL table (if it doesn't exist) and connect to it
     init_user_db()
-    conn = _get_connection()
-
-    try:
-        # Find a user from its ID
+    with _db_connection() as conn:
         user = conn.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone()
         if not user:
             return None
 
-        # Update its parameters
         updates = []
         params = []
         if name is not None:
@@ -227,66 +196,55 @@ def update_user(
             conn.execute(f"UPDATE users SET {', '.join(updates)} WHERE sub = ?", params)
             conn.commit()
 
-        # Return the information of the user
         row = conn.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone()
         return _row_to_user(row, include_hash=False)
-    finally:
-        conn.close()
 
 
 def deactivate_user(sub: str) -> bool:
-    """Deactivate the account of a user
+    """Deactivate a user account.
 
     Args:
-        sub (str): User ID
+        sub: User ID.
 
     Returns:
-        bool: Success of the deactivation (or not)
+        True if the account was deactivated, False if user not found.
     """
-
-    updated = update_user(sub, is_active=False)
-    return updated is not None
+    return update_user(sub, is_active=False) is not None
 
 
 def delete_user(sub: str) -> bool:
-    """Delete a user
+    """Delete a user.
 
     Args:
-        sub (str): user ID
+        sub: User ID.
 
     Returns:
-        bool: Success of the deletion
+        True if the user was deleted, False if not found.
     """
-    # Initiaize the SQL table (if it doesn't exist) and connect to it
     init_user_db()
-    conn = _get_connection()
-
-    # Delete the user of the database
-    try:
+    with _db_connection() as conn:
         cursor = conn.execute("DELETE FROM users WHERE sub = ?", (sub,))
         conn.commit()
         return cursor.rowcount > 0
-    finally:
-        conn.close()
 
 
 def user_count() -> int:
-    """Count the number of users in the table
+    """Count the number of users.
 
     Returns:
-        int: Number of users
+        Number of users in the database.
     """
-    # Initiaize the SQL table (if it doesn't exist) and connect to it
     init_user_db()
-    conn = _get_connection()
-
-    # Count the number of users
-    try:
+    with _db_connection() as conn:
         count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         return count
-    finally:
-        conn.close()
 
+
+@overload
+def _row_to_user(row: sqlite3.Row, include_hash: bool = True) -> dict[str, Any]: ...
+
+@overload
+def _row_to_user(row: None, include_hash: bool = True) -> None: ...
 
 def _row_to_user(row: sqlite3.Row | None, include_hash: bool = True) -> dict[str, Any] | None:
     """Transform a user SQL row into a python dictionnary
@@ -298,11 +256,9 @@ def _row_to_user(row: sqlite3.Row | None, include_hash: bool = True) -> dict[str
     Returns:
         dict[str, Any] | None: _description_
     """
-    # If the row doesn't exist, ignore this function
     if row is None:
         return None
     
-    # Format the user information
     user = {
         "sub": row["sub"],
         "username": row["username"],
@@ -312,7 +268,6 @@ def _row_to_user(row: sqlite3.Row | None, include_hash: bool = True) -> dict[str
         "created_at": row["created_at"],
     }
 
-    # Add the hashed code if asked
     if include_hash:
         user["password_hash"] = row["password_hash"]
     return user

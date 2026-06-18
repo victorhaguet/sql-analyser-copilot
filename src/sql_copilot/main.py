@@ -90,10 +90,30 @@ class UserResponse(BaseModel):
 
     sub: str
     username: str
-    name: str | None
+    name: str | None = None
     role: str
     is_active: bool
     created_at: str
+
+
+def _get_user_from_header(x_user_sub: str) -> dict[str, Any]:
+    """Get and validate user from header.
+
+    Args:
+        x_user_sub: User ID from header.
+
+    Returns:
+        User dictionary.
+
+    Raises:
+        HTTPException: If user not found or inactive.
+    """
+    user = get_user_by_sub(x_user_sub)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not user["is_active"]:
+        raise HTTPException(status_code=403, detail="Account is disabled")
+    return user
 
 
 class QueryResultPayload(BaseModel):
@@ -176,27 +196,26 @@ def _format_trace_step(step: SQLAgentTraceStep) -> str:
     update = step["update"]
     metadata = update.get("metadata") or {}
 
-    # Formatting for the database selector node
     if node == "database_selector":
         selected_database = metadata.get("selected_database") 
         lines = [f"Node: {node}", f"Outcome: {step['outcome']}"]
-        if selected_database: # If one database selected
-            lines.append(f"Selected Database: {selected_database}") # Show selected database
-        if metadata.get("candidate_databases"): # If candidate databases are listed in metadata
+        if selected_database: 
+            lines.append(f"Selected Database: {selected_database}") 
+        if metadata.get("candidate_databases"): 
             lines.append(
-                "Candidate Databases: " # Show candidate databases considered for selection
+                "Candidate Databases: " 
                 + ", ".join(cast(list[str], metadata["candidate_databases"]))
             )
-        if metadata.get("database_selection_reason"): # If selection reason is provided in metadata
-            lines.append(f"Reason: {metadata['database_selection_reason']}") # Display it
-        if update.get("execution_error"): # If there was an error
-            lines.append(f"Error: {update['execution_error']}") # Show error details
+        if metadata.get("database_selection_reason"): 
+            lines.append(f"Reason: {metadata['database_selection_reason']}") 
+        if update.get("execution_error"): 
+            lines.append(f"Error: {update['execution_error']}") 
         body = "\n".join(lines)
         return f"{_format_trace_header('Ai Message')}\n{body}"
 
-    # Formatting for the SQL generator node
+
     if node == "sql_generator":
-        body = "\n".join( # Show the generated SQL and the outcome
+        body = "\n".join( 
             [
                 f"Node: {node}",
                 f"Outcome: {step['outcome']}",
@@ -205,25 +224,24 @@ def _format_trace_step(step: SQLAgentTraceStep) -> str:
         ).strip()
         return f"{_format_trace_header('Ai Message')}\n{body}" 
 
-    # Formatting for the SQL validator node
     if node == "sql_validator":
         body = update.get("validated_sql") or update.get("sql_validation_error") or "(no output)"
-        return ( # Show the validated SQL
+        return ( 
             f"{_format_trace_header('Tool Message')}\n"
             f"Name: {node}\n\n"
             f"{body}"
         )
 
-    # Formatting for the SQL executor node
+
     if node == "sql_executor":
         parts = [f"Outcome: {step['outcome']}"]
         validated_sql = step["state"].get("validated_sql")
-        if validated_sql: # If there is validated SQL in the state
-            parts.extend(["SQL:", str(validated_sql)]) # Display it in the trace
-        if update.get("query_result") is not None: # If there is a query result
-            parts.append(_format_trace_payload(update["query_result"])) # Display the query result
-        elif update.get("execution_error"): # If there was an execution error
-            parts.append(f"Error: {update['execution_error']}") # Display the error details
+        if validated_sql: 
+            parts.extend(["SQL:", str(validated_sql)]) 
+        if update.get("query_result") is not None: 
+            parts.append(_format_trace_payload(update["query_result"])) 
+        elif update.get("execution_error"): 
+            parts.append(f"Error: {update['execution_error']}")
         return (
             f"{_format_trace_header('Tool Message')}\n"
             f"Name: {node}\n\n"
@@ -291,6 +309,25 @@ def _run_question_with_trace(
     else:
         log_path = None
     return result, trace, log_path
+
+
+def _serialize_user(user: dict[str, Any]) -> UserResponse:
+    """Convert user dictionary to UserResponse.
+
+    Args:
+        user: User dictionary from database.
+
+    Returns:
+        UserResponse instance.
+    """
+    return UserResponse(
+        sub=user["sub"],
+        username=user["username"],
+        name=user["name"],
+        role=user["role"],
+        is_active=user["is_active"],
+        created_at=user["created_at"],
+    )
 
 
 def _serialize_query_result(result: QueryResult | None) -> QueryResultPayload | None:
@@ -374,7 +411,7 @@ def answer_question(
         validator=validator,
         execution_limit=execution_limit,
     )
-    if include_trace: # If trace is requested, run with trace collection and log persistence
+    if include_trace: 
         result, trace, _log_path = _run_question_with_trace(question, graph, trace_log_dir, write_log=True)
         metadata = dict(result.get("metadata") or {})
         metadata["execution_trace"] = trace
@@ -440,13 +477,11 @@ def _select_requested_databases(
     Raises:
         DatabaseError: If the requested selection is empty or contains unknown names.
     """
-    # If no selection was requested, return the full catalog
     if configured_databases is None or requested_names is None:
         return configured_databases
     if not requested_names:
         raise DatabaseError("At least one database must be selected.")
 
-    # Get all the databases matching the requested names, and track any unknown names for error handling
     configured_by_name = {database.name: database for database in configured_databases}
     selected_databases: list[RegisteredDatabase] = []
     unknown_names: list[str] = []
@@ -496,7 +531,6 @@ def create_app(
             "FastAPI is not installed. Install project dependencies before creating the API app."
         )
 
-    # Before creating the app, make sure one admin exist
     ensure_admin_exists()
 
     fastapi_app = FastAPI(title="SQL Analyser Copilot", version="0.1.0")
@@ -514,72 +548,39 @@ def create_app(
 
     @fastapi_app.post("/auth/login")
     def login(payload: LoginRequest) -> UserResponse:
-        """Identifiate a user and return his or her profile
+        """Identify a user and return their profile.
 
         Args:
-            payload (LoginRequest): User information
+            payload: User login credentials.
 
         Raises:
-            HTTPException: If user value is missing
-            HTTPException: If the password doesn't correspond
-            HTTPException: If the user is unactive
+            HTTPException: If credentials are invalid or account is disabled.
 
         Returns:
-            UserResponse: User information
+            UserResponse: User information.
         """
-        # Get the username and password
         user = get_user_by_username(payload.username)
-
-        # Check if the user exist and can access the app
-        if not user:
-            raise HTTPException(status_code=401, detail="Invalid username or password")
-        if not verify_password(payload.password, user["password_hash"]):
+        if not user or not verify_password(payload.password, user["password_hash"]):
             raise HTTPException(status_code=401, detail="Invalid username or password")
         if not user["is_active"]:
             raise HTTPException(status_code=403, detail="Account is disabled")
-        
-        # If yes, return the user info
-        return UserResponse(
-            sub=user["sub"],
-            username=user["username"],
-            name=user["name"],
-            role=user["role"],
-            is_active=user["is_active"],
-            created_at=user["created_at"],
-        )
+        return _serialize_user(user)
 
     @fastapi_app.get("/auth/me")
     def get_me(x_user_sub: str = Header(...)) -> UserResponse:
-        """Return the current authentificated profile
+        """Return the current authenticated profile.
 
         Args:
-            x_user_sub (str, optional): User. Defaults to Header(...).
+            x_user_sub: User ID from header.
 
         Raises:
-            HTTPException: If the user doesn't correspond
-            HTTPException: If the user is unactive
+            HTTPException: If user not found or inactive.
 
         Returns:
-            UserResponse: User information
+            UserResponse: User information.
         """
-        # Get the user 
-        user = get_user_by_sub(x_user_sub)
-
-        # If the user doesn't exist or is unactive
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        if not user["is_active"]:
-            raise HTTPException(status_code=403, detail="Account is disabled")
-        
-        # return the user information
-        return UserResponse(
-            sub=user["sub"],
-            username=user["username"],
-            name=user["name"],
-            role=user["role"],
-            is_active=user["is_active"],
-            created_at=user["created_at"],
-        )
+        user = _get_user_from_header(x_user_sub)
+        return _serialize_user(user)
 
     @fastapi_app.post("/auth/users")
     def register_user(
@@ -589,26 +590,20 @@ def create_app(
         """Create a new user. Only admins can use this feature.
 
         Args:
-            payload (UserCreate): Payload of the new user to create
-            x_user_sub (str, optional): Admin information. Defaults to Header(...).
-            x_user_role (str, optional): Admin role. Defaults to Header(...).
+            payload: Payload of the new user to create.
+            x_user_role: Admin role from header.
 
         Raises:
-            HTTPException: If the current user isn't an admin, raise an error
-            HTTPException: Check the role of the new user exist
-            HTTPException: Raise an error if the user couldn't be created
+            HTTPException: If not admin, invalid role, or user creation fails.
 
         Returns:
-            UserResponse: _description_
+            UserResponse: Created user information.
         """
-        # If the current user isn't an admin, raise an error
         if x_user_role != "admin":
             raise HTTPException(status_code=403, detail="Admin access required")
-        # CHeck if the new user have one of the allowed role
         if payload.role not in {"admin", "editor", "readonly"}:
             raise HTTPException(status_code=400, detail="Invalid role")
         try:
-            # Create the new user
             user = create_user(
                 username=payload.username,
                 password_hash=hash_password(payload.password),
@@ -617,49 +612,27 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        
-        # Return user infos
-        return UserResponse(
-            sub=user["sub"],
-            username=user["username"],
-            name=user["name"],
-            role=user["role"],
-            is_active=user["is_active"],
-            created_at=user["created_at"],
-        )
+        return _serialize_user(user)
 
     @fastapi_app.get("/auth/users")
     def get_users(
         x_user_role: str = Header(...),
     ) -> list[UserResponse]:
-        """List all users
+        """List all users.
 
         Args:
-            x_user_role (str, optional): Current user role. Defaults to Header(...).
+            x_user_role: Current user role from header.
 
         Raises:
-            HTTPException: If the user isn't an admin, raise error
+            HTTPException: If not admin.
 
         Returns:
-            list[UserResponse]: List of all the users
+            List of all users.
         """
-        # Check if the current user is an admin
         if x_user_role != "admin":
             raise HTTPException(status_code=403, detail="Admin access required")
         users = list_users()
-
-        # Return the list of users.
-        return [
-            UserResponse(
-                sub=u["sub"],
-                username=u["username"],
-                name=u["name"],
-                role=u["role"],
-                is_active=u["is_active"],
-                created_at=u["created_at"],
-            )
-            for u in users
-        ]
+        return [_serialize_user(u) for u in users]
 
     @fastapi_app.put("/auth/users/{sub}")
     def update_user_endpoint(
@@ -667,66 +640,47 @@ def create_app(
         payload: UserUpdate,
         x_user_role: str = Header(...),
     ) -> UserResponse:
-        """Update a user role or status
+        """Update a user role or status.
 
         Args:
-            sub (str): ID of the user to update
-            payload (UserUpdate): Information to update
-            x_user_role (str, optional): Role of the current user. Defaults to Header(...).
+            sub: ID of the user to update.
+            payload: Information to update.
+            x_user_role: Role of the current user from header.
 
         Raises:
-            HTTPException: If the current user isn't an admin, raise an error
-            HTTPException: If the role doesn't existe, raise an error
-            HTTPException: If the update doesn't work, raise an error
+            HTTPException: If not admin, invalid role, or user not found.
 
         Returns:
-            UserResponse: Information of the updated user
+            UserResponse: Updated user information.
         """
-        # Check if the command is called by an admin
         if x_user_role != "admin":
             raise HTTPException(status_code=403, detail="Admin access required")
-        
-        # Check if the role correspond to an existing role
         if payload.role is not None and payload.role not in {"admin", "editor", "readonly"}:
             raise HTTPException(status_code=400, detail="Invalid role")
-        
-        # Update the user information
         user = update_user(sub, name=payload.name, role=payload.role, is_active=payload.is_active)
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
-        
-        # User information
-        return UserResponse(
-            sub=user["sub"],
-            username=user["username"],
-            name=user["name"],
-            role=user["role"],
-            is_active=user["is_active"],
-            created_at=user["created_at"],
-        )
+        return _serialize_user(user)
 
     @fastapi_app.delete("/auth/users/{sub}")
     def delete_user_endpoint(
         sub: str,
         x_user_role: str = Header(...),
     ) -> dict[str, str]:
-        """Delete a user account
+        """Delete a user account.
 
         Args:
-            sub (str): Id of the account to delete
-            x_user_role (str, optional): Role of the current user. Defaults to Header(...).
+            sub: ID of the account to delete.
+            x_user_role: Role of the current user from header.
 
         Raises:
-            HTTPException: If the current user isn't an admin, raise error
-            HTTPException: If the account that will be deleted doesn't exist, raise an error
+            HTTPException: If not admin or user not found.
 
         Returns:
-            dict[str, str]: Return a validation directory
+            Validation dictionary.
         """
-        # Chekc if it is an admin that call the function
         if x_user_role != "admin":
             raise HTTPException(status_code=403, detail="Admin access required")
-        # Delete the accound
         deleted = delete_user(sub)
         if not deleted:
             raise HTTPException(status_code=404, detail="User not found")
