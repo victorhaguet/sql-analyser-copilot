@@ -27,3 +27,8 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.mypy]
+mypy_path = "src"
+files = ["src", "tests"]
+explicit_package_bases = true
