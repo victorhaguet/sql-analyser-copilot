@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -31,7 +32,6 @@ from sql_copilot.auth import (
 
 # Import graph functions
 from sql_copilot.graph import SQLAgentTraceStep, build_sql_agent_graph, stream_sql_agent_execution
-from sql_copilot.llms import load_models_from_env
 from sql_copilot.nodes.sql_generator import TextModel
 from sql_copilot.state import SQLAgentState
 from sql_copilot.tools.database import (
@@ -41,6 +41,8 @@ from sql_copilot.tools.database import (
     load_database_catalog_from_env,
 )
 from sql_copilot.tools.sql_safety import SQLSafetyValidator
+
+from sql_copilot.llms.openai_compatible import OpenAICompatibleResponsesModel
 
 load_dotenv()
 
@@ -745,6 +747,35 @@ def create_app(
         return _serialize_state(result, question=payload.question)
 
     return fastapi_app
+
+
+def load_models_from_env() -> tuple[OpenAICompatibleResponsesModel | None, OpenAICompatibleResponsesModel | None]:
+    """
+    Create default SQL generator and analyst models from environment variables.
+    
+    Returns:
+        A tuple containing the generator model and analyst model instances, or (None, None) if the API key is not set.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None, None
+
+    base_url: str | None = os.getenv("OPENAI_BASE_URL")
+    generator_model_name: str | None = os.getenv("SQL_COPILOT_MODEL")
+    analyst_model_name: str | None = os.getenv("SQL_COPILOT_ANALYST_MODEL") or generator_model_name
+
+    return (
+        OpenAICompatibleResponsesModel(
+            model=generator_model_name, # type: ignore
+            api_key=api_key, # type: ignore
+            base_url=base_url,
+        ),
+        OpenAICompatibleResponsesModel(
+            model=analyst_model_name, # type: ignore
+            api_key=api_key,
+            base_url=base_url,
+        ),
+    )
 
 
 def create_app_from_env() -> FastAPI:

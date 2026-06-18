@@ -9,9 +9,9 @@ from typing import Any
 from sql_copilot.nodes.sql_generator import (
     SQLGeneratorModel,
     _load_prompt,
-    _model_output_to_text,
     _render_prompt,
 )
+from sql_copilot.utils.llm import extract_text_from_response
 from sql_copilot.state import SQLAgentState
 from sql_copilot.tools.database import QueryResult
 
@@ -84,4 +84,4 @@ class ResultAnalystNode:
             sql=state["validated_sql"],
             result_payload=_serialize_result(result),
         )
-        return {"analysis": _model_output_to_text(self.model.invoke(prompt))}
+        return {"analysis": extract_text_from_response(self.model.invoke(prompt))}

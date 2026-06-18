@@ -13,6 +13,7 @@ from sql_copilot.tools.database import (
     format_database_schema,
     get_default_database,
 )
+from sql_copilot.utils.llm import extract_text_from_response, strip_code_fences
 
 # Get the prompt template for SQL generation.
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "sql_generator.j2"
@@ -72,59 +73,6 @@ def _render_prompt(template: str, **context: Any) -> str:
     return PROMPT_ENVIRONMENT.from_string(template).render(**context).strip()
 
 
-def _model_output_to_text(response: Any) -> str:
-    """
-    Convert the raw output from the model into a clean text string.
-
-    Args:
-        response: The raw output from the model
-    
-    Returns:
-        A cleaned text string extracted from the model output.
-    """
-    # If it is already a string, just return it stripped. 
-    if isinstance(response, str):
-        return response.strip()
-    # If it has a 'content' attribute, try to extract it.
-    content = getattr(response, "content", None)
-    # If content is a string, return it stripped.
-    if isinstance(content, str):
-        return content.strip()
-    # If content is a list of dicts, extract text parts.
-    if isinstance(content, list):
-        text_parts = [
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and isinstance(part.get("text"), str)
-        ]
-        return "\n".join(part for part in text_parts if part).strip()
-    return str(response).strip()
-
-
-def _strip_sql_fence(text: str) -> str:
-    """
-    Remove SQL code fences from the given text.
-
-    Args:
-        text: The text potentially containing SQL code fences.
-
-    Returns:
-        The text with SQL code fences removed.
-    """
-    # Strip the query
-    stripped = text.strip()
-    # If the text starts with a code fence, remove it and any trailing code fence.
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        stripped = "\n".join(lines).strip()
-    # If the text starts with "sql\n", remove that prefix.
-    return stripped.removeprefix("sql").strip() if stripped.lower().startswith("sql\n") else stripped
-
-
 class SQLGeneratorNode:
     """Generate SQL from a natural-language question."""
 
@@ -168,7 +116,7 @@ class SQLGeneratorNode:
             question=question,
             schema_overview=schema_overview,
         )
-        generated_sql = _strip_sql_fence(_model_output_to_text(self.model.invoke(prompt)))
+        generated_sql = strip_code_fences(extract_text_from_response(self.model.invoke(prompt)), language_prefix="sql")
         return {
             "schema_overview": schema_overview,
             "generated_sql": generated_sql,

@@ -9,9 +9,9 @@ from typing import Any
 from sql_copilot.nodes.sql_generator import (
     SQLGeneratorModel,
     _load_prompt,
-    _model_output_to_text,
     _render_prompt,
 )
+from sql_copilot.utils.llm import extract_text_from_response, strip_code_fences
 from sql_copilot.state import SQLAgentState
 from sql_copilot.tools.database import RegisteredDatabase, format_database_schema
 
@@ -50,16 +50,7 @@ def _normalize_model_decision(raw_text: str) -> dict[str, Any]:
     Returns:
         A dictionary with keys `match`, `database`, `candidate_databases`, and `reason`.
     """
-    # The model is expected to return a JSON blob, but we need to be resilient to formatting issues like code blocks or extra text.
-    cleaned = raw_text.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
-    cleaned = cleaned.removeprefix("json").strip()
+    cleaned = strip_code_fences(raw_text.strip(), language_prefix="json")
 
     try:
         decision = json.loads(cleaned) # Load the selector model's output
@@ -119,29 +110,24 @@ class DatabaseSelectorNode:
         Returns:
             A dictionary containing the updated state with either the selected database or an error message.
         """
-        # Single database configuration
         question = state["question"]
         if len(self.databases) == 1 and self.model is None:
             return self._selection_result(self.databases[0], reason="Single database configured.")
 
-        # No model provided for multi-database selection
         if self.model is None:
             return self._no_match_result(
                 "The question could not be matched to a configured database. "
                 "Reformulate it with more domain-specific details."
             )
 
-        # Model-driven selection for multi-database configuration
         prompt = _render_prompt(
             self.prompt_template,
             question=question,
             catalog_payload=_build_catalog_payload(self.databases),
         )
-        decision = _normalize_model_decision(_model_output_to_text(self.model.invoke(prompt)))
+        decision = _normalize_model_decision(extract_text_from_response(self.model.invoke(prompt)))
 
-        # If the model didn't find a clear match
         if not decision["match"]:
-            # Return ambiguous message
             candidate_names = self._valid_candidate_names(decision["candidate_databases"])
             if len(candidate_names) > 1:
                 reason = decision["reason"] or (
