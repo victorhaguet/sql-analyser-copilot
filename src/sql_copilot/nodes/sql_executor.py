@@ -8,6 +8,34 @@ from sql_copilot.state import SQLAgentState
 from sql_copilot.tools.database import DatabaseError, SQLiteDatabase, get_default_database
 
 
+def _get_database(state: SQLAgentState, default: SQLiteDatabase) -> SQLiteDatabase:
+    """Get database from state or return default.
+
+    Args:
+        state (SQLAgentState): State of the graph
+        default (SQLiteDatabase): Default database
+
+    Returns:
+        SQLiteDatabase: Current database in the state
+    """    
+    return state.get("selected_database") or default
+
+
+def _format_execution_error(error: DatabaseError) -> dict[str, Any]:
+    """Format execution error response.
+
+    Args:
+        error (DatabaseError): Content of the error
+
+    Returns:
+        dict[str, Any]: Formatted error message
+    """    
+    return {
+        "execution_error": str(error),
+        "analysis": f"SQL execution failed: {error}",
+    }
+
+
 class SQLExecutorNode:
     """Execute validated SQL against SQLite."""
 
@@ -34,14 +62,11 @@ class SQLExecutorNode:
             DatabaseError: If the SQL execution fails.
         """
         validated_sql = state.get("validated_sql", "")
-        database = state.get("selected_database") or self.database # Fallback to default database if not set in state
+        database = _get_database(state, self.database)
         try:
             result = database.execute_command(validated_sql, limit=self.limit) 
         except DatabaseError as exc:
-            return {
-                "execution_error": str(exc),
-                "analysis": f"SQL execution failed: {exc}",
-            }
+            return _format_execution_error(exc)
         return {
             "query_result": result,
             "execution_error": None,

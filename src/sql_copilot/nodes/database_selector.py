@@ -6,11 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sql_copilot.nodes.sql_generator import (
-    SQLGeneratorModel,
-    _load_prompt,
-    _render_prompt,
-)
+from sql_copilot.utils.nodes import load_prompt, render_prompt
+from sql_copilot.nodes.sql_generator import SQLGeneratorModel
 from sql_copilot.utils.llm import extract_text_from_response, strip_code_fences
 from sql_copilot.state import SQLAgentState
 from sql_copilot.tools.database import RegisteredDatabase, format_database_schema
@@ -84,7 +81,7 @@ class DatabaseSelectorNode:
             raise ValueError("DatabaseSelectorNode requires at least one registered database.")
         self.databases = databases
         self.model = model
-        self.prompt_template = prompt_template or _load_prompt(
+        self.prompt_template = prompt_template or load_prompt(
             PROMPT_PATH,
             (
                 "You route a user question to the most relevant SQLite database.\n"
@@ -120,7 +117,7 @@ class DatabaseSelectorNode:
                 "Reformulate it with more domain-specific details."
             )
 
-        prompt = _render_prompt(
+        prompt = render_prompt(
             self.prompt_template,
             question=question,
             catalog_payload=_build_catalog_payload(self.databases),

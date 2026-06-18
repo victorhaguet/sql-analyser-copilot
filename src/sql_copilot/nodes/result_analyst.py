@@ -6,16 +6,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sql_copilot.nodes.sql_generator import (
-    SQLGeneratorModel,
-    _load_prompt,
-    _render_prompt,
-)
+from sql_copilot.utils.nodes import load_prompt, render_prompt
+from sql_copilot.nodes.sql_generator import SQLGeneratorModel
 from sql_copilot.utils.llm import extract_text_from_response
 from sql_copilot.state import SQLAgentState
 from sql_copilot.tools.database import QueryResult
 
-# Get the prompt template for result analysis.
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "result_analyst.j2"
 
 
@@ -47,7 +43,7 @@ class ResultAnalystNode:
     ) -> None:
         """Initialize the ResultAnalystNode."""
         self.model = model
-        self.prompt_template = prompt_template or _load_prompt(
+        self.prompt_template = prompt_template or load_prompt(
             PROMPT_PATH,
             (
                 "You explain SQL query results to a business user.\n"
@@ -78,7 +74,7 @@ class ResultAnalystNode:
                 summary += f" First row: {result.rows[0]}."
             return {"analysis": summary}
 
-        prompt = _render_prompt(
+        prompt = render_prompt(
             self.prompt_template,
             question=state["question"],
             sql=state["validated_sql"],
