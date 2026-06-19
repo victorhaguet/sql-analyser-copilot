@@ -13,7 +13,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from tools.database import DEFAULT_DB_PATH
+from tools._helpers import build_dummy_parameters, mask_literals_and_comments
+from tools.exceptions import (
+    EmptyQueryError,
+    ForbiddenKeywordError,
+    InvalidQueryError,
+    MultipleStatementsError,
+    NonSelectQueryError,
+    SQLSafetyError,
+)
+from utils.paths import DEFAULT_DB_PATH
 
 # Keywords forbidden in SQL queries
 FORBIDDEN_KEYWORDS = (
@@ -50,30 +59,6 @@ FORBIDDEN_PATTERN = re.compile(
 # Regular expressions to detect parameters
 NAMED_PARAMETER_PATTERN = re.compile(r"(?<!:)([:@$])([A-Za-z_][A-Za-z0-9_]*)")
 POSITIONAL_PARAMETER_PATTERN = re.compile(r"\?")
-
-# Errors to raise when validation fails
-class SQLSafetyError(Exception):
-    """Base error raised by SQL safety validation."""
-
-
-class EmptyQueryError(SQLSafetyError):
-    """Raised when the SQL query is empty."""
-
-
-class MultipleStatementsError(SQLSafetyError):
-    """Raised when more than one SQL statement is supplied."""
-
-
-class NonSelectQueryError(SQLSafetyError):
-    """Raised when the SQL statement is not a read-only SELECT/CTE query."""
-
-
-class ForbiddenKeywordError(SQLSafetyError):
-    """Raised when a forbidden mutating SQL keyword is present."""
-
-
-class InvalidQueryError(SQLSafetyError):
-    """Raised when SQLite cannot parse the query."""
 
 
 @dataclass(slots=True)
@@ -113,7 +98,7 @@ class SQLSafetyValidator:
         normalized_query = self._normalize_query(query)
 
         # Step 2: Mask literals and comments
-        masked_query = _mask_literals_and_comments(normalized_query)
+        masked_query = mask_literals_and_comments(normalized_query)
 
         # Step 3: Ensure only a single statement is present
         self._ensure_single_statement(masked_query)
@@ -190,9 +175,8 @@ class SQLSafetyValidator:
 
         if normalized_query.endswith(";"):
             normalized_query = normalized_query[:-1].rstrip()
-
-        if not normalized_query:
-            raise EmptyQueryError("SQL query cannot be empty.")
+            if not normalized_query:
+                raise EmptyQueryError("SQL query cannot be empty.")
 
         return normalized_query
 
@@ -260,7 +244,7 @@ class SQLSafetyValidator:
         explain_query = f"EXPLAIN QUERY PLAN {normalized_query}"
         explain_parameters = parameters
         if explain_parameters is None:
-            explain_parameters = _build_dummy_parameters(masked_query)
+            explain_parameters = build_dummy_parameters(masked_query)
 
         # Try to execute the EXPLAIN QUERY PLAN statement to ensure SQLite can parse it
         try:
@@ -311,120 +295,3 @@ def ensure_safe_select_query(
     return SQLSafetyValidator(database_path).assert_safe_select(query, parameters)
 
 
-def _mask_literals_and_comments(sql: str) -> str:
-    """
-    Replace strings, quoted identifiers, and comments with spaces while preserving
-    statement structure and keyword positions.
-
-    Args:
-        sql: The SQL query to mask.
-
-    Returns:
-        str: The masked SQL query.
-    """
-    chars = list(sql)
-    masked: list[str] = []
-    i = 0
-    length = len(chars)
-
-    # Mask literals, quoted identifiers, and comments
-    while i < length:
-        current = chars[i]
-        next_char = chars[i + 1] if i + 1 < length else ""
-
-        # Mask single-line comments starting with --
-        if current == "-" and next_char == "-":
-            masked.extend("  ")
-            i += 2
-            while i < length and chars[i] != "\n":
-                masked.append(" ")
-                i += 1
-            continue
-
-        # Mask multi-line comments starting with /* and ending with */
-        if current == "/" and next_char == "*":
-            masked.extend("  ")
-            i += 2
-            while i < length:
-                if chars[i] == "*" and i + 1 < length and chars[i + 1] == "/":
-                    masked.extend("  ")
-                    i += 2
-                    break
-                masked.append("\n" if chars[i] == "\n" else " ")
-                i += 1
-            continue
-
-        # Mask string literals enclosed in single quotes, handling escaped single quotes
-        if current == "'":
-            masked.append(" ")
-            i += 1
-            while i < length:
-                char = chars[i]
-                masked.append("\n" if char == "\n" else " ")
-                if char == "'" and not (i + 1 < length and chars[i + 1] == "'"):
-                    i += 1
-                    break
-                if char == "'" and i + 1 < length and chars[i + 1] == "'":
-                    masked.append(" ")
-                    i += 2
-                    continue
-                i += 1
-            continue
-
-        # Mask quoted identifiers enclosed in double quotes, backticks, or square brackets
-        if current in {'"', "`"}:
-            quote = current
-            masked.append(" ")
-            i += 1
-            while i < length:
-                char = chars[i]
-                masked.append("\n" if char == "\n" else " ")
-                if char == quote:
-                    i += 1
-                    break
-                i += 1
-            continue
-
-        # Mask quoted identifiers enclosed in square brackets, which can contain nested brackets
-        if current == "[":
-            masked.append(" ")
-            i += 1
-            while i < length:
-                char = chars[i]
-                masked.append("\n" if char == "\n" else " ")
-                if char == "]":
-                    i += 1
-                    break
-                i += 1
-            continue
-
-        masked.append(current)
-        i += 1
-
-    return "".join(masked)
-
-
-def _build_dummy_parameters(masked_query: str) -> Sequence[Any] | Mapping[str, Any]:
-    """
-    Build placeholder values so SQLite can parse parameterized statements with EXPLAIN.
-
-    Args:
-        masked_query: The SQL query with literals and comments masked.
-
-    Returns:
-        Sequence[Any] | Mapping[str, Any]: A sequence of None for positional parameters or a
-        mapping of parameter names to None for named parameters.
-    """
-    named_matches = NAMED_PARAMETER_PATTERN.findall(masked_query)
-    positional_count = len(POSITIONAL_PARAMETER_PATTERN.findall(masked_query))
-
-    if named_matches and positional_count:
-        return {"mixed_parameters_not_supported": None}
-
-    if named_matches:
-        return {name: None for _, name in named_matches}
-
-    if positional_count:
-        return tuple(None for _ in range(positional_count))
-
-    return ()

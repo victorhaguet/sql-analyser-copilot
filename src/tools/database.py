@@ -15,10 +15,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
+# Get the project root directory (where src/ is a subdirectory)
+# Walk up from the current file's location to find the project root
+_current_file = Path(__file__).resolve()
+_project_root = _current_file.parents[1] if (_current_file.parent.parent / "src").exists() else _current_file.parents[0]
+
 # Default path to the SQLite database file (Chinook sample database)
-DEFAULT_DB_PATH = (
-    Path(__file__).resolve().parents[3] / "data" / "Chinook_Sqlite.sqlite"
-)
+from utils.paths import DEFAULT_DB_PATH
 
 # Exceptions and errors related to database operations
 class DatabaseError(Exception):
@@ -303,19 +306,41 @@ def register_database(
 def get_default_database() -> SQLiteDatabase:
     """
     Get the default SQLite database instance.
-
-    Returns:
-        SQLiteDatabase: The default SQLite database instance.
+    
+    Uses auto-discovered database if available, otherwise falls back to Chinook.
     """
+    data_dir = _project_root / "data"
+    if data_dir.exists():
+        sqlite_files = list(data_dir.glob("*.sqlite")) + list(data_dir.glob("*.db"))
+        if sqlite_files:
+            return SQLiteDatabase(str(sqlite_files[0]))
+    
     return SQLiteDatabase()
 
 
 def get_default_database_catalog() -> list[RegisteredDatabase]:
-    """Return the default single-database catalog."""
-    default_database = get_default_database()
+    """
+    Return the default database catalog.
+    
+    First tries to auto-discover SQLite databases in the data/ directory.
+    If none found, falls back to Chinook database.
+    """
+    data_dir = _project_root / "data"
+    if data_dir.exists():
+        sqlite_files = list(data_dir.glob("*.sqlite")) + list(data_dir.glob("*.db"))
+        if sqlite_files:
+            return [
+                register_database(
+                    SQLiteDatabase(str(db_path)),
+                    name=db_path.stem,
+                    description=f"SQLite database: {db_path.name}",
+                )
+                for db_path in sqlite_files
+            ]
+    
     return [
         register_database(
-            default_database,
+            get_default_database(),
             name="chinook",
             description=(
                 "Music store database with artists, albums, tracks, genres, customers, "
