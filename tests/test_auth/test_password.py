@@ -8,7 +8,7 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
-from auth.password import hash_password, verify_password
+from app_auth.password import hash_password, verify_password
 
 
 class PasswordHashingTestCase(unittest.TestCase):

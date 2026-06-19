@@ -10,19 +10,19 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
-from auth.admin import (
+from app_auth.admin import (
     admin_credentials_configured,
     ensure_admin_exists,
     is_admin_account_created,
 )
-from auth.database import (
+from app_auth.database import (
     create_user,
     delete_user,
     get_user_by_username,
     init_user_db,
     user_count,
 )
-import auth.database as db_module
+import app_auth.database as db_module
 
 
 class AdminBootstrapTestCase(unittest.TestCase):

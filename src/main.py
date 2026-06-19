@@ -18,7 +18,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Import authentification functions
-from auth import (
+from app_auth import (
     create_user,
     ensure_admin_exists,
     get_user_by_sub,
@@ -795,4 +795,4 @@ app = create_app_from_env() if FastAPI is not None else None
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("sql_copilot.main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

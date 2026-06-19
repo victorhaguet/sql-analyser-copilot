@@ -10,7 +10,7 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
-from auth.database import (
+from app_auth.database import (
     _get_connection,
     _ensure_users_dir,
     create_user,
@@ -37,7 +37,7 @@ class UserDatabaseTestCase(unittest.TestCase):
         self._temp_users_dir = Path(self._temp_dir.name)
         self._temp_db_path = self._temp_users_dir / "users.db"
         
-        import auth.database as db_module
+        import app_auth.database as db_module
         self._original_users_dir = db_module._USERS_DIR
         self._original_users_db = db_module._USERS_DB
         
@@ -47,7 +47,7 @@ class UserDatabaseTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         self._temp_dir.cleanup()
         
-        import auth.database as db_module
+        import app_auth.database as db_module
         db_module._USERS_DIR = self._original_users_dir
         db_module._USERS_DB = self._original_users_db
 
@@ -183,7 +183,7 @@ class UserDatabaseTestCase(unittest.TestCase):
 
     def test_list_users_includes_password_hash_when_requested(self) -> None:
         """Test that password hash can be included in user list."""
-        import auth.database as db_module
+        import app_auth.database as db_module
         
         created = create_user(username="withsecret", password_hash="hash1")
         
@@ -293,7 +293,7 @@ class UserDatabaseTestCase(unittest.TestCase):
 
     def test_users_directory_is_created(self) -> None:
         """Test that the users directory is created if it doesn't exist."""
-        import auth.database as db_module
+        import app_auth.database as db_module
         
         test_dir = self._temp_users_dir / "subdir" / "users"
         db_module._USERS_DIR = test_dir
@@ -313,14 +313,14 @@ class UserDatabaseTestCase(unittest.TestCase):
 
     def test_row_to_user_with_none_row(self) -> None:
         """Test that _row_to_user returns None for None input."""
-        import auth.database as db_module
+        import app_auth.database as db_module
         
         result = db_module._row_to_user(None)
         self.assertIsNone(result)
 
     def test_row_to_user_with_none_row_and_include_hash(self) -> None:
         """Test that _row_to_user returns None for None input even with include_hash=True."""
-        import auth.database as db_module
+        import app_auth.database as db_module
         
         result = db_module._row_to_user(None, include_hash=True)
         self.assertIsNone(result)
