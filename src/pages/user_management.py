@@ -2,73 +2,14 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-import httpx
 import streamlit as st
 from dotenv import load_dotenv
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from pages.login import logout # pylint: disable=import-error
-
+from pages.auth import get_api_client, is_authenticated_page, require_admin, require_auth
+from pages.config import ROLE_OPTIONS, STATUS_OPTIONS
+from pages.auth import render_logout_button
 
 load_dotenv()
-
-DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
-ROLE_OPTIONS = ["readonly", "editor", "admin"]
-STATUS_OPTIONS = {"Active": True, "Inactive": False}
-
-
-def _is_authenticated_page() -> bool:
-    """Check if somebody is logged
-
-    Returns:
-        bool: True if a user is logged, otherwise false
-    """
-    return bool(st.session_state.get("user_authenticated"))
-
-
-def _is_admin() -> bool:
-    """Check if a user is an admin
-
-    Returns:
-        bool: True if yes, false if not
-    """
-    user = st.session_state.get("user", {})
-    return user.get("role") == "admin"
-
-
-def _require_auth() -> None:
-    """Stop the page when the user is not authenticated."""
-    if not _is_authenticated_page():
-        st.error("Please log in first.")
-        st.stop()
-
-
-def _get_client() -> httpx.Client:
-    """Get the FastAPI backend client
-
-    Returns:
-        httpx.Client: FastAPI client
-    """
-    user = st.session_state.get("user", {})
-    base = st.session_state.get("api_base_url", DEFAULT_API_BASE_URL)
-    # Get the user information
-    headers = {
-        "X-User-Sub": user.get("sub", ""),
-        "X-User-Role": user.get("role", ""),
-    }
-    return httpx.Client(base_url=base.rstrip("/"), headers=headers, timeout=30.0)
-
-
-def _require_admin() -> None:
-    """Stop the page when the current user is not an admin."""
-    if not _is_admin():
-        st.error("Your account is not authorized to access the User Management page.")
-        st.stop()
 
 
 def _fetch_users() -> list[dict]:
@@ -77,9 +18,8 @@ def _fetch_users() -> list[dict]:
     Returns:
         list[dict]: Admin information
     """
-    # Make sure only admin can access this page
-    _require_admin()
-    client = _get_client()
+    require_admin()
+    client = get_api_client()
     response = client.get("/auth/users")
     if response.is_error:
         st.error(f"Failed to load users: {response.text}")
@@ -98,11 +38,9 @@ def _create_user(username: str, password: str, name: str | None, role: str) -> b
     Returns:
         bool: Check if the user is created or not
     """
-    # Make sure only admins can do the following action
-    _require_admin()
-    client = _get_client()
+    require_admin()
+    client = get_api_client()
 
-    # Create the client
     payload = {"username": username, "password": password, "name": name, "role": role}
     response = client.post("/auth/users", json=payload)
     if response.is_error:
@@ -121,11 +59,9 @@ def _update_user_role(sub: str, role: str) -> bool:
     Returns:
         bool: Check if the modification worked
     """
-    # Make sure only the admins can call this method
-    _require_admin()
-    client = _get_client()
+    require_admin()
+    client = get_api_client()
 
-    # Change the role
     response = client.put(f"/auth/users/{sub}", json={"role": role})
     if response.is_error:
         st.error(f"Failed to update role: {response.text}")
@@ -134,7 +70,7 @@ def _update_user_role(sub: str, role: str) -> bool:
 
 
 def _update_user_active(sub: str, is_active: bool) -> bool:
-    """Activate or deactivae a user account
+    """Activate or deactivate a user account
 
     Args:
         sub (str): Id of the user
@@ -143,11 +79,9 @@ def _update_user_active(sub: str, is_active: bool) -> bool:
     Returns:
         bool: Check if the modification worked
     """
-    # Only admins can do that
-    _require_admin()
-    client = _get_client()
+    require_admin()
+    client = get_api_client()
 
-    # Change Active status of the user
     response = client.put(f"/auth/users/{sub}", json={"is_active": is_active})
     if response.is_error:
         st.error(f"Failed to update status: {response.text}")
@@ -164,10 +98,8 @@ def _delete_user(sub: str) -> bool:
     Returns:
         bool: Check if the deletion worked
     """
-    # You know the story
-    _require_admin()
-    client = _get_client()
-    # Delete the account
+    require_admin()
+    client = get_api_client()
     response = client.delete(f"/auth/users/{sub}")
     if response.is_error:
         st.error(f"Failed to delete user: {response.text}")
@@ -177,20 +109,16 @@ def _delete_user(sub: str) -> bool:
 
 def render_user_management() -> None:
     """Render the full user management page."""
-    # Make sure only admins can access this page and get the info of the one that connect to it.
-    _require_auth()
-    _require_admin()
+    require_auth()
+    require_admin()
 
-    # Render title
     st.title("User Management")
     st.markdown(
         f"Logged in as **{st.session_state.get('user', {}).get('username', '')}** (admin)"
     )
 
-    # Tab list
     tab_create, tab_list = st.tabs(["Create User", "Manage Users"])
 
-    # UI of the creation tab
     with tab_create:
         st.markdown("### Create new user")
         with st.form("create_user_form", clear_on_submit=True):
@@ -207,7 +135,6 @@ def render_user_management() -> None:
                 "Create user", use_container_width=True
             )
 
-            # If the create user button is pushed
             if submitted:
                 if not new_username or not new_password:
                     st.error("Username and password are required.")
@@ -222,7 +149,6 @@ def render_user_management() -> None:
                         )
                         st.rerun()
 
-    # UI of the manage user tab
     with tab_list:
         st.markdown("### Existing users")
         users = _fetch_users()
@@ -232,7 +158,6 @@ def render_user_management() -> None:
 
         current_sub = st.session_state.get("user", {}).get("sub", "")
 
-        # For each user, create a table with its information
         for user in users:
             is_self = user["sub"] == current_sub
             with st.container(border=True):
@@ -243,7 +168,6 @@ def render_user_management() -> None:
                 col2.write(user.get("name") or "—")
                 current_status = "Active" if user["is_active"] else "Inactive"
 
-                # Role column
                 with col3:
                     if is_self:
                         st.write(user["role"])
@@ -260,7 +184,6 @@ def render_user_management() -> None:
                                 st.success("Role updated.")
                                 st.rerun()
 
-                # Active status column
                 with col4:
                     if is_self:
                         st.write(current_status)
@@ -278,7 +201,6 @@ def render_user_management() -> None:
                                 st.success("Status updated.")
                                 st.rerun()
 
-                # Deletion column
                 with col5:
                     if is_self:
                         st.caption("(you)")
@@ -296,22 +218,9 @@ def render_user_management() -> None:
                                     st.rerun()
 
 
-def _render_logout_button() -> None:
-    """Render the sign-out action outside of the sidebar."""
-    # Sign out button
-    header_columns = st.columns([6, 1])
-    with header_columns[1]:
-        if st.button(
-            "Sign out",
-            use_container_width=True,
-            key="user-management-sign-out",
-        ):
-            logout()
-
-
 def render_user_management_page() -> None:
     """Render the full user management page with page-level actions."""
-    if _is_authenticated_page():
-        _render_logout_button()
+    if is_authenticated_page():
+        render_logout_button()
 
     render_user_management()

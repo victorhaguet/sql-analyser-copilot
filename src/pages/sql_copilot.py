@@ -2,32 +2,19 @@
 
 from __future__ import annotations
 
-import os
-import sys
 from pathlib import Path
 
 import httpx
 import streamlit as st
 from dotenv import load_dotenv
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from pages.login import is_authenticated, logout, show_login_page # pylint: disable=no-name-in-module
-from streamlit_ui import ( # pylint: disable=no-name-in-module
-    build_display_context,
-    build_empty_result_state,
-)
-from tools.database import ( # pylint: disable=no-name-in-module
-    DatabaseError,
-    RegisteredDatabase,
-    load_database_catalog_from_env,
-)
+from pages.login import is_authenticated_page, show_login_page
+from pages.auth import render_logout_button
+from pages.config import DEFAULT_API_BASE_URL, DEFAULT_QUESTION
+from streamlit_ui import build_display_context, build_empty_result_state
+from tools.database import DatabaseError, RegisteredDatabase, load_database_catalog_from_env
 
 load_dotenv()
-
-DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
-DEFAULT_QUESTION = ""
 
 
 def call_api(
@@ -47,10 +34,8 @@ def call_api(
     Returns:
         dict[str, object]: Result of the question
     """
-    # Clear the question
     clean_question = question.strip()
 
-    # If the question is empty, send error message
     if not clean_question:
         empty_state = build_empty_result_state()
         empty_state["ai_answer"] = "Enter a question before running the analysis."
@@ -58,7 +43,6 @@ def call_api(
         empty_state["error_message"] = "Missing question"
         return empty_state
 
-    # Get user information (state + ID and role)
     user = st.session_state.get("user", {})
     headers = {
         "X-User-Sub": user.get("sub", ""),
@@ -66,7 +50,6 @@ def call_api(
     }
 
     try:
-        # Call the FastAPI backend
         response = httpx.post(
             f"{api_base_url.rstrip('/')}/query",
             json={
@@ -78,7 +61,6 @@ def call_api(
             timeout=120.0,
         )
     except httpx.HTTPError as exc:
-        # If it doesn't work, display an error message
         error_state = build_empty_result_state()
         error_state["question"] = clean_question
         error_state["ai_answer"] = f"FastAPI request failed: {exc}"
@@ -86,13 +68,11 @@ def call_api(
         error_state["error_message"] = "API request failed"
         return error_state
 
-    # Get the response into json format
     try:
         response_data = response.json()
     except ValueError:
         response_data = {}
 
-    # Return an error message in case the fastAPi call didn't work
     if response.is_error:
         detail = response_data.get("detail") or "The API request failed."
         error_state = build_empty_result_state()
@@ -106,15 +86,14 @@ def call_api(
 
 
 def _initialize_state() -> None:
-    """Initialize the state of the page
-    """
+    """Initialize the state of the page"""
     st.session_state.setdefault("question_input", DEFAULT_QUESTION)
     st.session_state.setdefault("result_state", build_empty_result_state())
     st.session_state.setdefault("selected_databases", [])
 
 
 def _sync_selected_databases(databases: list[RegisteredDatabase]) -> list[str]:
-    """_summary_
+    """Sync selected databases with session state
 
     Args:
         databases (list[RegisteredDatabase]): All the databases selected by the user
@@ -122,7 +101,6 @@ def _sync_selected_databases(databases: list[RegisteredDatabase]) -> list[str]:
     Returns:
         list[str]: List of the databases selected
     """
-    # Check available databases (selected by the user)
     available_names = [database.name for database in databases]
     current_selection = [
         name
@@ -162,10 +140,8 @@ def _render_database_catalog() -> list[str]:
     Returns:
         list[str]: List of selected databases
     """
-    # Load the databases catalog
     databases, error_message = _load_database_catalog()
 
-    # Show all the accessible databases
     with st.container(border=True, key="database-catalog"):
         st.text("Available databases")
 
@@ -177,20 +153,16 @@ def _render_database_catalog() -> list[str]:
             st.info("No databases are configured.")
             return []
 
-        # Check the selected databases
         selected_databases = _sync_selected_databases(databases)
         selected_count = len(selected_databases)
         st.caption(f"{selected_count} of {len(databases)} databases active")
 
-        # Display one block per database
         columns = st.columns(min(len(databases), 3), gap="small")
         for index, database_entry in enumerate(databases):
-            # For each database
             metadata = database_entry.database.describe()
             table_count = len(metadata.get("tables") or [])
             is_selected = database_entry.name in selected_databases
             disabled = is_selected and selected_count == 1
-            # Information showed in the database container
             with columns[index % len(columns)]:
                 with st.container(border=True):
                     st.markdown(f"**{database_entry.name}**")
@@ -199,7 +171,6 @@ def _render_database_catalog() -> list[str]:
                     st.caption(
                         f"{table_count} tables • {Path(str(metadata['database_path'])).name}"
                     )
-                    # Enable/desable a database
                     updated_value = st.toggle(
                         "Use this database",
                         value=is_selected,
@@ -228,14 +199,12 @@ def _render_question_panel() -> tuple[str, int, bool]:
         tuple[str, int, bool]: List of input for the agent
     """
     with st.form("sql-copilot-form"):
-        # Question area
         question = st.text_area(
             "Question",
             key="question_input",
             placeholder="Example: Which 5 artists have the most albums ?",
             height=180,
         )
-        # Execution limit bar
         execution_limit = st.slider(
             "Execution limit",
             min_value=1,
@@ -248,7 +217,6 @@ def _render_question_panel() -> tuple[str, int, bool]:
         )
         submit_columns = st.columns([1, 4])
 
-        # Get all info when the run analysis button is pressed
         with submit_columns[0]:
             submitted = st.form_submit_button("Run analysis", use_container_width=True)
 
@@ -266,7 +234,6 @@ def _render_result_summary(result_state: dict[str, object]) -> None:
     Args:
         result_state (dict[str, object]): Output of the agent
     """
-    # Get result information
     query_result = result_state.get("query_result") or {}
     row_count = (
         int(query_result.get("row_count") or 0)
@@ -280,7 +247,6 @@ def _render_result_summary(result_state: dict[str, object]) -> None:
     )
     selected_database = str(result_state.get("selected_database") or "")
 
-    # Show them
     metric_columns = st.columns(4)
     metric_columns[0].metric("Database used", selected_database or "Unknown")
     metric_columns[1].metric("Rows returned", row_count)
@@ -293,7 +259,6 @@ def _render_result_summary(result_state: dict[str, object]) -> None:
         "Needs review" if result_state.get("has_error") else "Ready",
     )
 
-    # Tell the user if the preview is truncated 
     if truncated:
         st.info(
             "The query returned more rows than the selected execution limit, so the preview is truncated."
@@ -309,27 +274,22 @@ def _render_results(result_state: dict[str, object]) -> None:
     Args:
         result_state (dict[str, object]): _description_
     """
-    # Render result metrics
     _render_result_summary(result_state)
 
-    # Get result values
     answer_tab, sql_tab, data_tab = st.tabs(["Answer", "SQL", "Result Preview"])
 
-    # Write the AI anwser
     with answer_tab:
         if result_state.get("has_error"):
             st.error(str(result_state.get("ai_answer") or "The request failed."))
         else:
             st.write(str(result_state.get("ai_answer") or ""))
 
-    # Write the SQL request used
     with sql_tab:
         st.code(
             str(result_state.get("sql_query") or "-- SQL will appear here"),
             language="sql",
         )
 
-    # Show the Table obtained from the SQL request
     with data_tab:
         query_result = result_state.get("query_result")
         if isinstance(query_result, dict) and query_result.get("rows"):
@@ -338,36 +298,20 @@ def _render_results(result_state: dict[str, object]) -> None:
             st.info("No result rows were returned for this run.")
 
 
-def _render_logout_button() -> None:
-    """Render log out button"""
-    # Log out button
-    user = st.session_state.get("user", {})
-    header_columns = st.columns([5, 1])
-    with header_columns[0]:
-        st.caption(f"Signed in as {user.get('username', '')}")
-    with header_columns[1]:
-        if st.button("Sign out", use_container_width=True):
-            logout()
-
-
 def render_sql_copilot_page() -> None:
     """Render the SQL Copilot page or the login form when logged out."""
-    # Check if somebody is logged
-    if not is_authenticated():
+    if not is_authenticated_page():
         show_login_page()
         return
 
-    # Initialize the page + the log out button
-    _render_logout_button()
+    render_logout_button()
     _initialize_state()
-    api_base_url = os.getenv("SQL_COPILOT_API_BASE_URL", DEFAULT_API_BASE_URL)
+    api_base_url = st.session_state.get("api_base_url", DEFAULT_API_BASE_URL)
 
-    # Render elements of the page
     _render_header()
     selected_databases = _render_database_catalog()
     question, execution_limit, submitted = _render_question_panel()
 
-    # When a query is submitted, call the api
     if submitted:
         with st.spinner("Running query pipeline..."):
             st.session_state["result_state"] = call_api(
@@ -377,7 +321,6 @@ def render_sql_copilot_page() -> None:
                 selected_databases=selected_databases,
             )
 
-    # Get a result and render it
     result_state = st.session_state["result_state"]
     has_result_content = any(
         [
