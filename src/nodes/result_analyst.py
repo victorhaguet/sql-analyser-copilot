@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.nodes import load_prompt, render_prompt
-from nodes.sql_generator import SQLGeneratorModel
+from nodes.sql_generator import LLM
 from utils.llm import extract_text_from_response
 from state import SQLAgentState
 from tools.database import QueryResult
@@ -38,7 +38,7 @@ class ResultAnalystNode:
 
     def __init__(
         self,
-        model: SQLGeneratorModel | None = None,
+        model: LLM | None = None,
         prompt_template: str | None = None,
     ) -> None:
         """Initialize the ResultAnalystNode."""

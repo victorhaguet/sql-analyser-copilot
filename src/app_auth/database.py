@@ -109,7 +109,6 @@ def create_user(
             raise RuntimeError("User could not be created.")
         return user
 
-
 def get_user_by_username(username: str) -> dict[str, Any] | None:
     """Get user by username.
 

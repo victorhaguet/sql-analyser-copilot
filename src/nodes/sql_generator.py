@@ -17,8 +17,8 @@ from utils.llm import extract_text_from_response, strip_code_fences
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "sql_generator.j2"
 
 
-class SQLGeneratorModel(Protocol):
-    """Minimal protocol shared by SQL generation and analysis nodes."""
+class LLM(Protocol):
+    """Minimal protocol for language models used across all nodes."""
 
     def invoke(self, prompt: str) -> Any:
         """
@@ -32,15 +32,12 @@ class SQLGeneratorModel(Protocol):
         """
 
 
-TextModel = SQLGeneratorModel
-
-
 class SQLGeneratorNode:
     """Generate SQL from a natural-language question."""
 
     def __init__(
         self,
-        model: SQLGeneratorModel,
+        model: LLM,
         database: SQLiteDatabase | None = None,
         prompt_template: str | None = None,
     ) -> None:

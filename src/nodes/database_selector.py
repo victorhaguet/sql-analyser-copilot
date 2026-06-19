@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.nodes import load_prompt, render_prompt
-from nodes.sql_generator import SQLGeneratorModel
+from nodes.sql_generator import LLM
 from utils.llm import extract_text_from_response, strip_code_fences
 from state import SQLAgentState
 from tools.database import RegisteredDatabase, format_database_schema
@@ -73,7 +73,7 @@ class DatabaseSelectorNode:
     def __init__(
         self,
         databases: list[RegisteredDatabase],
-        model: SQLGeneratorModel | None = None,
+        model: LLM | None = None,
         prompt_template: str | None = None,
     ) -> None:
         """Initialize the selector node."""

@@ -7,11 +7,10 @@ from typing import Any
 from langchain_openai import ChatOpenAI
 
 from utils.llm import extract_text_from_response
+from nodes.sql_generator import LLM
 
 
-
-
-class OpenAICompatibleResponsesModel:
+class OpenAICompatibleResponsesModel(LLM):
     """Minimal invoke-based wrapper around langchain-openai ChatOpenAI."""
 
     def __init__(

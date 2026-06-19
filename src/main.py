@@ -32,7 +32,7 @@ from app_auth import (
 
 # Import graph functions
 from graph import SQLAgentTraceStep, build_sql_agent_graph, stream_sql_agent_execution
-from nodes.sql_generator import TextModel
+from nodes.sql_generator import LLM
 from state import SQLAgentState
 from tools.database import (
     DatabaseError,
@@ -43,6 +43,7 @@ from tools.database import (
 from tools.sql_safety import SQLSafetyValidator
 
 from llms.openai_compatible import OpenAICompatibleResponsesModel
+from nodes.sql_generator import LLM
 
 load_dotenv()
 
@@ -379,9 +380,9 @@ def _serialize_state(state: SQLAgentState, question: str) -> QueryResponse:
 
 def answer_question(
     question: str,
-    sql_generator_model: TextModel,
-    analyst_model: TextModel | None = None,
-    selector_model: TextModel | None = None,
+    sql_generator_model: LLM,
+    analyst_model: LLM | None = None,
+    selector_model: LLM | None = None,
     databases: list[RegisteredDatabase] | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
@@ -426,9 +427,9 @@ def answer_question(
 
 def stream_question(
     question: str,
-    sql_generator_model: TextModel,
-    analyst_model: TextModel | None = None,
-    selector_model: TextModel | None = None,
+    sql_generator_model: LLM,
+    analyst_model: LLM | None = None,
+    selector_model: LLM | None = None,
     databases: list[RegisteredDatabase] | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
@@ -504,9 +505,9 @@ def _select_requested_databases(
 
 
 def create_app(
-    sql_generator_model: TextModel | None = None,
-    analyst_model: TextModel | None = None,
-    selector_model: TextModel | None = None,
+    sql_generator_model: LLM | None = None,
+    analyst_model: LLM | None = None,
+    selector_model: LLM | None = None,
     databases: list[RegisteredDatabase] | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
