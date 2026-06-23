@@ -162,7 +162,6 @@ def answer_question(
         log_path = write_trace_log(question, trace, trace_log_dir)
         metadata = dict(result.get("metadata") or {})
         metadata["trace_log_path"] = str(log_path)
-        metadata["execution_trace"] = trace
         result["metadata"] = metadata
         return result
 

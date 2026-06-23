@@ -275,6 +275,8 @@ def query(payload: QueryRequest, x_user_sub: str = Header(...)) -> dict[str, Any
             databases=databases,
             validator=app.state.validator,
             execution_limit=payload.execution_limit,
+            include_trace=app.state.enable_trace,
+            trace_log_dir=app.state.trace_log_dir,
         )
     except DatabaseError as exc:
         raise HTTPException(

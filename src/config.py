@@ -46,15 +46,31 @@ def load_models_from_env() -> Tuple[OpenAICompatibleResponsesModel | None, OpenA
     )
 
 
+def load_trace_config() -> tuple[bool, str]:
+    """Load tracing configuration from environment variables.
+
+    Returns:
+        A tuple containing (enable_trace, trace_log_dir) where:
+        - enable_trace: Whether to enable trace logging
+        - trace_log_dir: Directory path for trace logs
+    """
+    enable_trace = os.getenv("ENABLE_TRACE_LOGGING", "false").lower() in ("true", "1", "yes")
+    trace_log_dir = os.getenv("TRACE_LOG_DIR", "logs")
+    return enable_trace, trace_log_dir
+
+
 def create_app_from_env():
     """Create the FastAPI app using OpenAI-compatible environment variables when present."""
 
     sql_generator_model, analyst_model = load_models_from_env()
+    enable_trace, trace_log_dir = load_trace_config()
     return create_app(
         sql_generator_model=sql_generator_model,
         analyst_model=analyst_model,
         selector_model=sql_generator_model,
         databases=None,
+        enable_trace=enable_trace,
+        trace_log_dir=trace_log_dir,
     )
 
 
@@ -65,6 +81,8 @@ def create_app(
     databases=None,
     validator=None,
     execution_limit: int = 200,
+    enable_trace: bool = False,
+    trace_log_dir: str = "logs",
 ):
     """Build the FastAPI application around the SQL copilot core.
 
@@ -91,5 +109,7 @@ def create_app(
     fastapi_app.state.databases = databases
     fastapi_app.state.validator = validator
     fastapi_app.state.execution_limit = execution_limit
+    fastapi_app.state.enable_trace = enable_trace
+    fastapi_app.state.trace_log_dir = trace_log_dir
 
     return fastapi_app
