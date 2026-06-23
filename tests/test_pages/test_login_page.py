@@ -106,9 +106,16 @@ class ShowLoginPageTestCase(LoginPageTestCase):
 
         self.assertTrue(st.session_state["user_authenticated"])
 
+    @patch("pages.login.admin_credentials_configured")
+    @patch("pages.login.is_admin_account_created")
     @patch("pages.login.httpx.post")
-    def test_failed_login_shows_error(self, mock_post: MagicMock) -> None:
+    def test_failed_login_shows_error(
+        self, mock_post: MagicMock, mock_is_created: MagicMock, mock_configured: MagicMock
+    ) -> None:
         """Test that failed login shows error message."""
+        mock_is_created.return_value = True
+        mock_configured.return_value = True
+        
         mock_response = MagicMock()
         mock_response.is_error = True
         mock_post.return_value = mock_response
@@ -122,8 +129,15 @@ class ShowLoginPageTestCase(LoginPageTestCase):
                     login.show_login_page()
                     mock_error.assert_called_once_with("Invalid username or password.")
 
-    def test_empty_credentials_shows_error(self) -> None:
+    @patch("pages.login.admin_credentials_configured")
+    @patch("pages.login.is_admin_account_created")
+    def test_empty_credentials_shows_error(
+        self, mock_is_created: MagicMock, mock_configured: MagicMock
+    ) -> None:
         """Test that empty credentials show error message."""
+        mock_is_created.return_value = True
+        mock_configured.return_value = True
+        
         st.session_state.clear()
         st.form_submit_button = MagicMock(return_value=True)
 
