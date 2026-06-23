@@ -25,10 +25,10 @@ coverage:
 	./venv/bin/coverage html --dir .coverage_html
 
 api:
-	./venv/bin/python3 src/sql_copilot/main.py
+	./venv/bin/python3 src/main.py
 
 ui:
-	./venv/bin/streamlit run src/sql_copilot/streamlit_app.py --server.port 8501
+	./venv/bin/streamlit run src/streamlit_app.py --server.port 8501
 
 docker-up:
 	docker compose up --build -d
