@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterator, Literal, Protocol, TypedDict, Any
+from typing import Iterator, Literal, Protocol, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph  
 from langgraph.graph.state import CompiledStateGraph 
@@ -73,7 +73,7 @@ def _route_from_sql_executor(state: SQLAgentState) -> str:
     return _route_after_execution(state)
 
 
-def _summarize_step_outcome(update: dict[str, Any]) -> str:
+def _summarize_step_outcome(update: SQLAgentState) -> str:
     """Summarize the current state of the graph
 
     Args:
@@ -104,9 +104,9 @@ def _summarize_step_outcome(update: dict[str, Any]) -> str:
 
 def _normalize_stream_event(
     event: object,
-    current_state: dict[str, Any],
+    current_state: SQLAgentState,
     stream_mode: TraceStreamMode,
-) -> tuple[str, dict[str, Any], dict[str, Any]]:
+) -> tuple[str, SQLAgentStateUpdate, SQLAgentState]:
     """Converts raw LangGraph stream events into a normalized format
 
     Args:
@@ -120,7 +120,7 @@ def _normalize_stream_event(
         TypeError: If the event usn't a dict (for stream_mode = values)
 
     Returns:
-        tuple[str, dict[str, Any], dict[str, Any]]: Normalize state of the graph
+        tuple[str, SQLAgentStateUpdate, SQLAgentState]: Normalize state of the graph
     """    
     if stream_mode == "updates":
         if not isinstance(event, dict) or len(event) != 1:
@@ -128,13 +128,12 @@ def _normalize_stream_event(
         node_name, update = next(iter(event.items()))
         if not isinstance(node_name, str) or not isinstance(update, dict):
             raise TypeError(f"Unexpected graph update event: {event!r}")
-        merged_state = dict(current_state)
-        merged_state.update(update)
-        return node_name, update, merged_state
+        merged_state = {**current_state, **update}
+        return node_name, cast(SQLAgentState, update), cast(SQLAgentState, merged_state)
 
     if not isinstance(event, dict):
         raise TypeError(f"Unexpected graph values event: {event!r}")
-    return "state", event, event
+    return "state", cast(SQLAgentState, event), cast(SQLAgentState, event)
 
 
 def stream_sql_agent_execution(
@@ -142,7 +141,7 @@ def stream_sql_agent_execution(
     initial_state: SQLAgentState,
     *,
     stream_mode: TraceStreamMode = "updates",
-) -> Iterator[dict[str, Any]]:
+) -> Iterator[SQLAgentTraceStep]:
     """Stream the SQL agent execution
 
     Args:
@@ -151,15 +150,15 @@ def stream_sql_agent_execution(
         stream_mode (TraceStreamMode, optional): Current state of the graph. Defaults to "updates".
 
     Yields:
-        Iterator[dict[str, Any]]: Current state of the graph
+        SQLAgentTraceStep: Current state of the graph
     """
-    state = dict(initial_state)
+    state = initial_state
     for event in graph.stream(initial_state, stream_mode=stream_mode):
         node_name, update, state = _normalize_stream_event(event, state, stream_mode)
         yield {
             "node": node_name,
             "update": update,
-            "state": dict(state),
+            "state": state,
             "outcome": _summarize_step_outcome(update),
         }
 
