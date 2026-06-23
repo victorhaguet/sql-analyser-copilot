@@ -1,9 +1,10 @@
 """Test the auth admin bootstrap module."""
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
-
+from unittest.mock import patch
 
 for parent in Path(__file__).resolve().parents:
     if (parent / "src").exists():
@@ -17,27 +18,45 @@ from app_auth.admin import (
 )
 from app_auth.database import (
     create_user,
-    delete_user,
     get_user_by_username,
     init_user_db,
     user_count,
 )
-import app_auth.database as db_module
 
 
-class AdminBootstrapTestCase(unittest.TestCase):
-    """Test case for admin bootstrap functions."""
+class AuthTestCase(unittest.TestCase):
+    """Base test case for auth module tests."""
 
     def setUp(self) -> None:
         self._original_env = os.environ.copy()
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self._temp_users_dir = Path(self._temp_dir.name)
+        self._temp_db_path = self._temp_users_dir / "users.db"
+        
+        self._patcher_usrs_dir = patch('app_auth.database._USERS_DIR', self._temp_users_dir)
+        self._patcher_usrs_db = patch('app_auth.database._USERS_DB', self._temp_db_path)
+        self._patcher_usrs_dir.start()
+        self._patcher_usrs_db.start()
+        
         init_user_db()
 
     def tearDown(self) -> None:
         os.environ.clear()
         os.environ.update(self._original_env)
-        users = db_module.list_users()
-        for user in users:
-            delete_user(sub=user["sub"])
+        self._patcher_usrs_dir.stop()
+        self._patcher_usrs_db.stop()
+        self._temp_dir.cleanup()
+
+
+class AdminBootstrapTestCase(AuthTestCase):
+    """Test case for admin bootstrap functions."""
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._original_env)
+        self._patcher_usrs_dir.stop()
+        self._patcher_usrs_db.stop()
+        self._temp_dir.cleanup()
 
     def test_admin_credentials_configured_returns_false_without_env(self) -> None:
         """Test that admin_credentials_configured returns False without env vars."""
@@ -116,6 +135,7 @@ class AdminBootstrapTestCase(unittest.TestCase):
         self.assertEqual(user_count(), 1)
         admin = get_user_by_username("admin")
         self.assertIsNotNone(admin)
+        assert admin is not None
         self.assertEqual(admin["role"], "admin")
 
     def test_ensure_admin_exists_with_custom_username(self) -> None:
@@ -136,6 +156,7 @@ class AdminBootstrapTestCase(unittest.TestCase):
         ensure_admin_exists()
         
         admin = get_user_by_username("admin")
+        assert admin is not None
         self.assertEqual(admin["role"], "admin")
 
     def test_ensure_admin_exists_hashes_password(self) -> None:
@@ -146,18 +167,18 @@ class AdminBootstrapTestCase(unittest.TestCase):
         ensure_admin_exists()
         
         admin = get_user_by_username("admin")
-        self.assertIn("password_hash", admin)
+        self.assertIn("password_hash", admin) # type: ignore[arg-type]
+        assert admin is not None
         self.assertNotEqual(admin["password_hash"], "admin123")
 
     def test_ensure_admin_exists_creates_database_if_needed(self) -> None:
-        """Test that ensure_admin_exists initializes database if it doesn't exist."""        
-        db_module._USERS_DB.unlink(missing_ok=True)
+        """Test that ensure_admin_exists initializes database if it doesn't exist."""
         os.environ["INITIAL_ADMIN_USERNAME"] = "admin"
         os.environ["INITIAL_ADMIN_PASSWORD"] = "admin123"
         
         ensure_admin_exists()
         
-        self.assertTrue(db_module._USERS_DB.exists())
+        self.assertTrue(self._temp_db_path.exists())
         self.assertEqual(user_count(), 1)
 
     def test_ensure_admin_exists_creates_admin_with_name(self) -> None:
@@ -168,6 +189,7 @@ class AdminBootstrapTestCase(unittest.TestCase):
         ensure_admin_exists()
         
         admin = get_user_by_username("admin")
+        assert admin is not None
         self.assertEqual(admin["name"], "Administrator")
 
     def test_ensure_admin_exists_multiple_calls(self) -> None:

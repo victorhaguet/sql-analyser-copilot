@@ -1,12 +1,5 @@
 """Test the auth password module."""
-import sys
 import unittest
-from pathlib import Path
-
-for parent in Path(__file__).resolve().parents:
-    if (parent / "src").exists():
-        sys.path.insert(0, str(parent / "src"))
-        break
 
 from app_auth.password import hash_password, verify_password
 

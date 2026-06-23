@@ -4,6 +4,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import datetime
+from typing import Any
+from unittest.mock import patch
 
 for parent in Path(__file__).resolve().parents:
     if (parent / "src").exists():
@@ -23,38 +26,33 @@ from app_auth.database import (
     update_user,
     user_count,
 )
+import app_auth.database as db_module
 
 
-class UserDatabaseTestCase(unittest.TestCase):
-    """Test case for the user database functions."""
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._original_env = os.environ.copy()
+class AuthTestCase(unittest.TestCase):
+    """Base test case for auth module tests."""
 
     def setUp(self) -> None:
+        self._original_env = os.environ.copy()
         self._temp_dir = tempfile.TemporaryDirectory()
         self._temp_users_dir = Path(self._temp_dir.name)
         self._temp_db_path = self._temp_users_dir / "users.db"
         
-        import app_auth.database as db_module
-        self._original_users_dir = db_module._USERS_DIR
-        self._original_users_db = db_module._USERS_DB
-        
-        db_module._USERS_DIR = self._temp_users_dir
-        db_module._USERS_DB = self._temp_db_path
+        self._patcher_usrs_dir = patch('app_auth.database._USERS_DIR', self._temp_users_dir)
+        self._patcher_usrs_db = patch('app_auth.database._USERS_DB', self._temp_db_path)
+        self._patcher_usrs_dir.start()
+        self._patcher_usrs_db.start()
 
     def tearDown(self) -> None:
-        self._temp_dir.cleanup()
-        
-        import app_auth.database as db_module
-        db_module._USERS_DIR = self._original_users_dir
-        db_module._USERS_DB = self._original_users_db
-
-    @classmethod
-    def tearDownClass(cls) -> None:
         os.environ.clear()
-        os.environ.update(cls._original_env)
+        os.environ.update(self._original_env)
+        self._patcher_usrs_dir.stop()
+        self._patcher_usrs_db.stop()
+        self._temp_dir.cleanup()
+
+
+class UserDatabaseTestCase(AuthTestCase):
+    """Test case for the user database functions."""
 
     def test_init_user_db_creates_database(self) -> None:
         """Test that init_user_db creates the database file and tables."""
@@ -141,6 +139,7 @@ class UserDatabaseTestCase(unittest.TestCase):
         )
         user = get_user_by_username("findme")
         self.assertIsNotNone(user)
+        assert user is not None
         self.assertEqual(user["username"], "findme")
         self.assertEqual(user["name"], "Find Me")
 
@@ -157,6 +156,7 @@ class UserDatabaseTestCase(unittest.TestCase):
         )
         user = get_user_by_sub(created["sub"])
         self.assertIsNotNone(user)
+        assert user is not None
         self.assertEqual(user["sub"], created["sub"])
 
     def test_get_user_by_sub_returns_none_for_missing(self) -> None:
@@ -183,8 +183,6 @@ class UserDatabaseTestCase(unittest.TestCase):
 
     def test_list_users_includes_password_hash_when_requested(self) -> None:
         """Test that password hash can be included in user list."""
-        import app_auth.database as db_module
-        
         created = create_user(username="withsecret", password_hash="hash1")
         
         conn = _get_connection()
@@ -209,6 +207,7 @@ class UserDatabaseTestCase(unittest.TestCase):
             name="Updated Name",
             role="admin",
         )
+        assert updated is not None
         
         self.assertEqual(updated["name"], "Updated Name")
         self.assertEqual(updated["role"], "admin")
@@ -226,6 +225,7 @@ class UserDatabaseTestCase(unittest.TestCase):
         update_user(sub=sub, role="admin")
         
         user = get_user_by_sub(sub)
+        assert user is not None
         self.assertEqual(user["name"], "Original")
         self.assertEqual(user["role"], "admin")
 
@@ -242,6 +242,7 @@ class UserDatabaseTestCase(unittest.TestCase):
         
         self.assertTrue(result)
         user = get_user_by_sub(created["sub"])
+        assert user is not None
         self.assertFalse(user["is_active"])
 
     def test_deactivate_user_returns_false_for_missing(self) -> None:
@@ -281,31 +282,33 @@ class UserDatabaseTestCase(unittest.TestCase):
 
     def test_user_count_updates_after_operations(self) -> None:
         """Test that user_count updates after create and delete operations."""
-        init_user_db()
-        self.assertEqual(user_count(), 0)
+        temp_db_path = Path(self._temp_dir.name) / "count_test.db"
         
-        create_user(username="u1", password_hash="h1")
-        self.assertEqual(user_count(), 1)
-        
-        user = get_user_by_username("u1")
-        delete_user(sub=user["sub"])
-        self.assertEqual(user_count(), 0)
+        with patch('app_auth.database._USERS_DB', temp_db_path):
+            init_user_db()
+            self.assertEqual(user_count(), 0)
+            
+            create_user(username="u1", password_hash="h1")
+            self.assertEqual(user_count(), 1)
+            
+            user = get_user_by_username("u1")
+            assert user is not None
+            delete_user(sub=user["sub"])
+            self.assertEqual(user_count(), 0)
 
     def test_users_directory_is_created(self) -> None:
         """Test that the users directory is created if it doesn't exist."""
-        import app_auth.database as db_module
-        
         test_dir = self._temp_users_dir / "subdir" / "users"
-        db_module._USERS_DIR = test_dir
-        db_module._USERS_DB = test_dir / "users.db"
+        test_db_path = test_dir / "users.db"
         
-        _ensure_users_dir()
+        with patch('app_auth.database._USERS_DIR', test_dir), \
+             patch('app_auth.database._USERS_DB', test_db_path):
+            _ensure_users_dir()
+        
         self.assertTrue(test_dir.exists())
 
     def test_created_at_timestamp_is_set(self) -> None:
-        """Test that created_at timestamp is properly set."""
-        import datetime
-        
+        """Test that created_at timestamp is properly set."""        
         user = create_user(username="timestamp", password_hash="hash1")
         self.assertIn("created_at", user)
         created_at = datetime.datetime.fromisoformat(user["created_at"])
@@ -313,17 +316,11 @@ class UserDatabaseTestCase(unittest.TestCase):
 
     def test_row_to_user_with_none_row(self) -> None:
         """Test that _row_to_user returns None for None input."""
-        import app_auth.database as db_module
-        
         result = db_module._row_to_user(None)
         self.assertIsNone(result)
-
-    def test_row_to_user_with_none_row_and_include_hash(self) -> None:
-        """Test that _row_to_user returns None for None input even with include_hash=True."""
-        import app_auth.database as db_module
         
-        result = db_module._row_to_user(None, include_hash=True)
-        self.assertIsNone(result)
+        result_with_hash = db_module._row_to_user(None, include_hash=True)
+        self.assertIsNone(result_with_hash)
 
 
 if __name__ == "__main__":
