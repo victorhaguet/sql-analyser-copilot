@@ -45,7 +45,6 @@ class TestNormalizeStreamEvent(unittest.TestCase):
 
     def test_normalize_stream_event_with_updates_mode(self) -> None:
         """Test normalization in updates stream mode."""
-        
 
         event = {"node1": {"key": "value"}}
         current_state = SQLAgentState(question="test")
@@ -92,6 +91,14 @@ class TestNormalizeStreamEvent(unittest.TestCase):
     def test_normalize_stream_event_raises_type_error_for_non_dict_update(self) -> None:
         """Test that non-dict updates raise TypeError."""
         event = {"node1": "not-a-dict"}
+        current_state = SQLAgentState(question="test")
+
+        with self.assertRaises(TypeError):
+            _normalize_stream_event(event, current_state, "updates")
+
+    def test_normalize_stream_event_empty_dict_raises_error(self) -> None:
+        """Test that empty dict raises TypeError in updates mode."""
+        event = {}
         current_state = SQLAgentState(question="test")
 
         with self.assertRaises(TypeError):
@@ -151,6 +158,108 @@ class TestSummarizeStepOutcome(unittest.TestCase):
         """Test summarization for default case."""
         result = _summarize_step_outcome({"metadata": {}})
         self.assertEqual(result, "updated")
+
+
+class FakeResponseTestCase(unittest.TestCase):
+    """Test FakeResponse class."""
+
+    def test_fake_response_has_content(self) -> None:
+        """FakeResponse should store and expose content."""
+        response = FakeResponse("test content")
+        self.assertEqual(response.content, "test content")
+
+
+class FakeModelTestCase(unittest.TestCase):
+    """Test FakeModel class."""
+
+    def test_fake_model_invoke_returns_response(self) -> None:
+        """Invoke should return FakeResponse with configured content."""
+        model = FakeModel("test response")
+        response = model.invoke("any prompt")
+        self.assertEqual(response.content, "test response")
+
+    def test_fake_model_stores_response(self) -> None:
+        """FakeModel should store the response."""
+        model = FakeModel("stored response")
+        self.assertEqual(model.response, "stored response")
+
+
+class FakeCompiledGraphTestCase(unittest.TestCase):
+    """Test FakeCompiledGraph class."""
+
+    def test_fake_compiled_graph_invoke(self) -> None:
+        """Test invoke method with simple linear graph."""
+        builder = FakeStateGraph(dict)
+        builder.add_node("node1", lambda s: {"key": "value1"})
+        builder.add_edge("__start__", "node1")
+
+        compiled = builder.compile()
+        result = compiled.invoke({})
+        self.assertEqual(result, {"key": "value1"})
+
+    def test_fake_compiled_graph_stream_updates(self) -> None:
+        """Test stream method with updates mode."""
+        builder = FakeStateGraph(dict)
+        builder.add_node("node1", lambda s: {"key": "value1"})
+        builder.add_edge("__start__", "node1")
+
+        compiled = builder.compile()
+        steps = list(compiled.stream({}, stream_mode="updates"))
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0], {"node1": {"key": "value1"}})
+
+    def test_fake_compiled_graph_stream_values(self) -> None:
+        """Test stream method with values mode."""
+        builder = FakeStateGraph(dict)
+        builder.add_node("node1", lambda s: {"key": "value1"})
+        builder.add_edge("__start__", "node1")
+
+        compiled = builder.compile()
+        steps = list(compiled.stream({}, stream_mode="values"))
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0], {"key": "value1"})
+
+    def test_fake_compiled_graph_stream_raises_invalid_mode(self) -> None:
+        """Test that invalid stream mode raises ValueError."""
+        builder = FakeStateGraph(dict)
+        builder.add_node("node1", lambda s: {"key": "value1"})
+        builder.add_edge("__start__", "node1")
+
+        compiled = builder.compile()
+        with self.assertRaises(ValueError) as cm:
+            list(compiled.stream({}, stream_mode="invalid"))
+        self.assertIn("invalid", str(cm.exception).lower())
+
+
+class FakeStateGraphTestCase(unittest.TestCase):
+    """Test FakeStateGraph class."""
+
+    def test_add_node(self) -> None:
+        """Test adding a node."""
+        graph = FakeStateGraph(dict)
+        node = lambda s: s
+        graph.add_node("test_node", node)
+        self.assertEqual(graph.nodes["test_node"], node)
+
+    def test_add_edge_sets_start_target(self) -> None:
+        """Test adding edge from start sets start target."""
+        graph = FakeStateGraph(dict)
+        graph.add_edge("__start__", "target_node")
+        self.assertEqual(graph.start_target, "target_node")
+
+    def test_add_edge_sets_normal_edge(self) -> None:
+        """Test adding normal edge."""
+        graph = FakeStateGraph(dict)
+        graph.add_edge("source", "target")
+        self.assertEqual(graph.edges["source"], "target")
+
+    def test_add_conditional_edges(self) -> None:
+        """Test adding conditional edges."""
+        graph = FakeStateGraph(dict)
+        router = lambda s: "route1"
+        mapping = {"route1": "node1", "route2": "node2"}
+        graph.add_conditional_edges("source", router, mapping)
+        self.assertEqual(graph.conditional_edges["source"], (router, mapping))
 
 
 class FakeResponse:
@@ -247,6 +356,18 @@ class FakeStateGraph:
         return FakeCompiledGraph(self)
 
 
+class TestNormalizeStreamEventTestCase(unittest.TestCase):
+    """Test _normalize_stream_event function edge cases."""
+
+    def test_normalize_stream_event_empty_dict_raises_error(self) -> None:
+        """Test that empty dict raises TypeError."""
+        event = {}
+        current_state = SQLAgentState(question="test")
+
+        with self.assertRaises(TypeError):
+            _normalize_stream_event(event, current_state, "updates")
+
+
 class SQLGraphTestCase(unittest.TestCase):
     """Test graph-specific behavior."""
 
@@ -281,6 +402,20 @@ class SQLGraphTestCase(unittest.TestCase):
         result = graph.invoke({"question": "Delete artists"})
         self.assertIn("sql_validation_error", result)
         self.assertNotIn("query_result", result)
+
+    def test_build_graph_executes_valid_query(self) -> None:
+        """Test that the graph successfully executes valid queries."""
+
+        from graph import build_sql_agent_graph
+
+        graph = build_sql_agent_graph(
+            FakeModel("SELECT * FROM Artist"),
+            databases=[register_database(SQLiteDatabase())],
+        )
+        result = graph.invoke({"question": "Select from Artist"})
+        self.assertIn("query_result", result)
+        self.assertIsNone(result.get("execution_error"))
+        self.assertIsNotNone(result["query_result"])
 
     def test_build_graph_stops_when_no_database_matches(self) -> None:
         """Questions outside the catalog should abort before SQL generation."""
@@ -337,6 +472,29 @@ class SQLGraphTestCase(unittest.TestCase):
         self.assertEqual(steps[1]["outcome"], "sql_generated")
         self.assertEqual(steps[-1]["outcome"], "analysis_ready")
         self.assertEqual(steps[-1]["state"]["analysis"][:8], "Returned")
+
+    def test_stream_sql_agent_execution_with_values_mode(self) -> None:
+        """Test streaming with values mode instead of updates mode."""
+
+        from graph import build_sql_agent_graph, stream_sql_agent_execution
+
+        graph = build_sql_agent_graph(
+            FakeModel("SELECT Name FROM Artist WHERE ArtistId = 1"),
+            databases=[register_database(SQLiteDatabase())],
+        )
+
+        steps = list(
+            stream_sql_agent_execution(
+                graph, {"question": "Who is artist 1?"}, stream_mode="values"
+            )
+        )
+
+        self.assertGreater(len(steps), 0)
+        for step in steps:
+            self.assertIn("node", step)
+            self.assertIn("update", step)
+            self.assertIn("outcome", step)
+            self.assertIn("state", step)
 
 
 if __name__ == "__main__":
