@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Iterator, Literal, Protocol, TypedDict, cast
+from typing import Any, Iterator, Literal, Protocol, TypedDict, cast
 
-from langgraph.graph import END, START, StateGraph  
-from langgraph.graph.state import CompiledStateGraph 
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import Command 
 
 from nodes.database_selector import DatabaseSelectorNode
 from nodes.result_analyst import ResultAnalystNode
@@ -30,6 +30,9 @@ ROUTE_ABORT = "abort"
 
 class CompiledSQLAgentGraph(Protocol):
     """Protocol for the compiled graph methods used by the trace helpers."""
+
+    def invoke(self, input_: SQLAgentState | Command[Any] | None) -> dict[str, Any] | Any:
+        """Run the graph and return the final state."""
 
     def stream(
         self,
@@ -170,7 +173,7 @@ def build_sql_agent_graph(
     databases: list[RegisteredDatabase] | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
-) -> CompiledStateGraph:
+) -> CompiledSQLAgentGraph:
     """Build the SQL agent graph
 
     Args:
@@ -221,4 +224,4 @@ def build_sql_agent_graph(
         },
     )
     graph.add_edge(NODE_RESULT_ANALYST, END)
-    return graph.compile()
+    return cast(CompiledSQLAgentGraph, graph.compile())

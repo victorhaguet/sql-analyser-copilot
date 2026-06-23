@@ -154,18 +154,18 @@ def answer_question(
         trace: list[SQLAgentTraceStep] = list(
             stream_sql_agent_execution(graph, cast(SQLAgentState, {"question": question}))
         )
-        result: SQLAgentState = (
+        result_state: SQLAgentState = (
             cast(SQLAgentState, trace[-1]["state"])
             if trace
             else cast(SQLAgentState, {"question": question})
         )
         log_path = write_trace_log(question, trace, trace_log_dir)
-        metadata = dict(result.get("metadata") or {})
+        metadata = dict(result_state.get("metadata") or {})
         metadata["trace_log_path"] = str(log_path)
-        result["metadata"] = metadata
-        return result
+        result_state["metadata"] = metadata
+        return result_state
 
-    result = cast(SQLAgentState, graph.invoke({"question": question}))
+    result = cast(SQLAgentState, graph.invoke(cast(SQLAgentState, {"question": question})))
     return result
 
 
