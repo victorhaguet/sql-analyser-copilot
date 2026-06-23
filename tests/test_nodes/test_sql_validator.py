@@ -2,14 +2,7 @@
 
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
-
-for parent in Path(__file__).resolve().parents:
-    if (parent / "src").exists():
-        sys.path.insert(0, str(parent / "src"))
-        break
 
 from nodes.sql_validator import SQLValidatorNode
 
@@ -17,9 +10,9 @@ from nodes.sql_validator import SQLValidatorNode
 class SQLValidatorNodeTestCase(unittest.TestCase):
     """Test SQL validation behavior."""
 
-    def test_sql_validator_rejects_mutating_sql(self) -> None:
-        """Test that the SQLValidatorNode rejects non-SELECT queries and provides appropriate error messages."""
+    def test_rejects_mutating_sql(self) -> None:
         result = SQLValidatorNode()({"generated_sql": "DELETE FROM Artist"})
+
         self.assertEqual(result["validated_sql"], "")
         self.assertIn("Only SELECT queries are allowed", result["sql_validation_error"])
         self.assertIn("SQL validation failed", result["analysis"])
