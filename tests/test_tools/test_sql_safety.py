@@ -23,10 +23,11 @@ from tools.sql_safety import (
 
 class SQLSafetyValidatorTestCase(unittest.TestCase):
     """Test case for SQL safety validation."""
+    validator: SQLSafetyValidator
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.validator = SQLSafetyValidator()
+        cls.validator = SQLSafetyValidator() 
 
     def test_validate_select_accepts_simple_query(self) -> None:
         """Test that a simple SELECT query is accepted and normalized correctly."""
