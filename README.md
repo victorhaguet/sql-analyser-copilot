@@ -1,5 +1,40 @@
 # sql-analyser-copilot
 
+A LangGraph-based SQL Copilot that translates natural language questions into SQL queries, validates them for safety, executes them against SQLite databases, and analyzes the results. Built with FastAPI, Streamlit, and LangGraph.
+
+## Architecture
+
+The SQL Copilot uses a 5-node LangGraph workflow:
+
+![Architecture](docs/graph.png)
+
+### Workflow
+
+1. **Database Selector** - Routes questions to the most relevant database
+2. **SQL Generator** - Converts natural language to SQL using LLM
+3. **SQL Validator** - Ensures query safety (no destructive operations)
+4. **SQL Executor** - Runs the validated query against the database
+5. **Result Analyst** - Analyzes results and generates insights
+
+## Authentication System
+
+The application includes a user authentication system with role-based access control:
+
+- **Roles**: `admin`, `editor`, `readonly`
+- **Password hashing**: Argon2 via passlib
+- **User management**: Admin-only CRUD operations
+
+### Endpoints
+
+| Endpoint | Method | Description | Role Required |
+|----------|--------|-------------|---------------|
+| `/auth/login` | POST | Authenticate user | Any |
+| `/auth/me` | GET | Get current user info | Any |
+| `/auth/users` | POST | Create user | admin |
+| `/auth/users` | GET | List all users | admin |
+| `/auth/users/{sub}` | PUT | Update user | admin |
+| `/auth/users/{sub}` | DELETE | Delete user | admin |
+
 ## Run with an OpenAI model via LangChain
 
 Install dependencies:
@@ -40,7 +75,7 @@ SQL_COPILOT_DATABASES='[
 Start the API:
 
 ```bash
-python3 src/sql_copilot/main.py
+make api
 ```
 
 Try it:
@@ -55,8 +90,17 @@ curl -X POST http://127.0.0.1:8000/query \
 Start the Streamlit UI in a separate process:
 
 ```bash
-streamlit run src/sql_copilot/streamlit_app.py
+make ui
 ```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/query` | POST | Execute SQL query (requires authentication) |
+
+**Authentication**: Include the user's `sub` (subject ID) in the `x_user_sub` header.
 
 Defaults:
 
@@ -100,14 +144,6 @@ make docker-down # Stop Docker containers
 - [Docker](https://docs.docker.com/get-docker/) installed
 - [Docker Compose](https://docs.docker.com/compose/install/) installed
 
-### Quick start
-
-```bash
-docker compose up --build
-```
-
-Open the Streamlit UI at [http://localhost:8501](http://localhost:8501).
-
 ### Configuration
 
 Copy the environment file and set your API keys:
@@ -116,6 +152,14 @@ Copy the environment file and set your API keys:
 cp .env.example .env
 # Edit .env with your OPENAI_API_KEY and other settings
 ```
+
+### Quick start
+
+```bash
+make docker-up
+```
+
+Open the Streamlit UI at [http://localhost:8501](http://localhost:8501).
 
 ### Services
 
@@ -132,5 +176,5 @@ Database files are mounted from the host's `data/` directory at runtime. To use 
 ### Stopping
 
 ```bash
-docker-compose down
+make docker-down
 ```
