@@ -191,9 +191,9 @@ def build_sql_agent_graph(
     default_database = database_catalog[0].database
     graph = StateGraph(SQLAgentState)
     graph.add_node(NODE_DATABASE_SELECTOR, DatabaseSelectorNode(database_catalog, model=selector_model))
-    graph.add_node(NODE_SQL_GENERATOR, SQLGeneratorNode(sql_generator_model, default_database))
-    graph.add_node(NODE_SQL_VALIDATOR, SQLValidatorNode(validator))
-    graph.add_node(NODE_SQL_EXECUTOR, SQLExecutorNode(default_database, limit=execution_limit))
+    graph.add_node(NODE_SQL_GENERATOR, SQLGeneratorNode(sql_generator_model, default_database, database_catalog))
+    graph.add_node(NODE_SQL_VALIDATOR, SQLValidatorNode(validator, database_catalog))
+    graph.add_node(NODE_SQL_EXECUTOR, SQLExecutorNode(default_database, database_catalog, limit=execution_limit))
     graph.add_node(NODE_RESULT_ANALYST, ResultAnalystNode(analyst_model))
 
     graph.add_edge(START, NODE_DATABASE_SELECTOR)

@@ -91,6 +91,26 @@ def _serialize_query_result(result: QueryResult | None) -> dict[str, Any] | None
     }
 
 
+def _serialize_trace(trace: list[SQLAgentTraceStep]) -> list[dict[str, Any]]:
+    """Serialize trace steps for JSON storage.
+
+    Args:
+        trace: List of trace steps
+
+    Returns:
+        List of serialized trace steps
+    """
+    serialized = []
+    for step in trace:
+        serialized_step: dict[str, Any] = {
+            "node": step["node"],
+            "update": step["update"],
+            "outcome": step["outcome"],
+        }
+        serialized.append(serialized_step)
+    return serialized
+
+
 def _serialize_state(state: SQLAgentState, question: str) -> dict[str, Any]:
     """Convert the internal graph state into the public API response model.
 
@@ -104,7 +124,7 @@ def _serialize_state(state: SQLAgentState, question: str) -> dict[str, Any]:
     return {
         "question": question,
         "schema_overview": state.get("schema_overview"),
-        "selected_database": (state.get("metadata") or {}).get("selected_database"),
+        "selected_database": state.get("selected_database"),
         "generated_sql": state.get("generated_sql"),
         "validated_sql": state.get("validated_sql"),
         "sql_validation_error": state.get("sql_validation_error"),
@@ -160,8 +180,9 @@ def answer_question(
             else cast(SQLAgentState, {"question": question})
         )
         log_path = write_trace_log(question, trace, trace_log_dir)
+        
         metadata = dict(result_state.get("metadata") or {})
-        metadata["execution_trace"] = trace
+        metadata["execution_trace"] = _serialize_trace(trace)
         metadata["trace_log_path"] = str(log_path)
         result_state["metadata"] = metadata
         return result_state

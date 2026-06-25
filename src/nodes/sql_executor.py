@@ -5,20 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from state import SQLAgentState
-from tools.database import DatabaseError, SQLiteDatabase, get_default_database
-
-
-def _get_database(state: SQLAgentState, default: SQLiteDatabase) -> SQLiteDatabase:
-    """Get database from state or return default.
-
-    Args:
-        state (SQLAgentState): State of the graph
-        default (SQLiteDatabase): Default database
-
-    Returns:
-        SQLiteDatabase: Current database in the state
-    """    
-    return state.get("selected_database") or default
+from tools.database import DatabaseError, SQLiteDatabase, get_default_database, RegisteredDatabase
+from nodes import get_database
 
 
 def _format_execution_error(error: DatabaseError) -> dict[str, Any]:
@@ -42,10 +30,12 @@ class SQLExecutorNode:
     def __init__(
         self,
         database: SQLiteDatabase | None = None,
+        database_catalog: list[RegisteredDatabase] | None = None,
         limit: int = 200,
     ) -> None:
         """Initialize the SQLExecutorNode."""
         self.database = database or get_default_database()
+        self.database_catalog = database_catalog
         self.limit = limit
 
     def __call__(self, state: SQLAgentState) -> dict[str, Any]:
@@ -62,7 +52,7 @@ class SQLExecutorNode:
             DatabaseError: If the SQL execution fails.
         """
         validated_sql = state.get("validated_sql", "")
-        database = _get_database(state, self.database)
+        database = get_database(state, self.database, self.database_catalog)
         try:
             result = database.execute_command(validated_sql, limit=self.limit) 
         except DatabaseError as exc:

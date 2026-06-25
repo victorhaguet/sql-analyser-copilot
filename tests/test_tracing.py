@@ -148,8 +148,6 @@ class TracingTestCase(unittest.TestCase):
                     row_count=1,
                     truncated=False,
                 ),
-            },
-            "state": {
                 "validated_sql": "SELECT * FROM test",
             },
             "outcome": "success",

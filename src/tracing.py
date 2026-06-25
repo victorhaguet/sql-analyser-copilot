@@ -103,7 +103,7 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
 
     if node == "sql_executor":
         parts = [f"Outcome: {step['outcome']}"]
-        validated_sql = step["state"].get("validated_sql")
+        validated_sql = update.get("validated_sql")
         if validated_sql:
             parts.extend(["SQL:", str(validated_sql)])
         if update.get("query_result") is not None:

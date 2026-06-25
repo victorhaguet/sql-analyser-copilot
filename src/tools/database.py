@@ -18,7 +18,7 @@ from typing import Any, Iterator, Mapping, Sequence
 # Get the project root directory (where src/ is a subdirectory)
 # Walk up from the current file's location to find the project root
 _current_file = Path(__file__).resolve()
-_project_root = _current_file.parents[1] if (_current_file.parent.parent / "src").exists() else _current_file.parents[0]
+_project_root = _current_file.parents[1] if (_current_file.parent.parent / "src").exists() else _current_file.parents[2]
 
 # Default path to the SQLite database file (Chinook sample database)
 from utils.paths import DEFAULT_DB_PATH

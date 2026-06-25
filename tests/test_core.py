@@ -242,7 +242,7 @@ class CoreTestCase(unittest.TestCase):
             trace = result["metadata"]["execution_trace"]
             self.assertEqual(trace[0]["node"], "database_selector")
             self.assertEqual(trace[-1]["node"], "result_analyst")
-            self.assertEqual(trace[-1]["state"]["analysis"], result["analysis"])
+            self.assertEqual(trace[-1]["update"]["analysis"], result["analysis"])
             self.assertTrue(Path(result["metadata"]["trace_log_path"]).exists())
 
     def test_answer_question_creates_trace_log_file(self) -> None:
@@ -420,6 +420,7 @@ class CoreTestCase(unittest.TestCase):
         state: dict = {
             "question": "Test question",
             "schema_overview": "overview",
+            "selected_database": "db1",
             "metadata": {"selected_database": "db1"},
             "generated_sql": "SELECT * FROM t",
             "validated_sql": "SELECT * FROM t",
