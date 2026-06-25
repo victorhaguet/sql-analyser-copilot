@@ -33,7 +33,7 @@ class DatabaseSelectorNodeTestCase(unittest.TestCase):
 
         self.assertEqual(result["metadata"]["selected_database"], "chinook")
         self.assertIn("Artist(", result["schema_overview"])
-        self.assertIsInstance(result["selected_database"], SQLiteDatabase)
+        self.assertEqual(result["selected_database"], "chinook")
 
     def test_returns_error_when_no_database_matches(self) -> None:
         node = DatabaseSelectorNode(
