@@ -182,7 +182,7 @@ class DatabaseSelectorNode:
         """
         schema_overview = format_database_schema(entry.database)
         return {
-            "selected_database": entry.database,
+            "selected_database": entry.name,
             "schema_overview": schema_overview,
             "metadata": {
                 "selected_database": entry.name,
