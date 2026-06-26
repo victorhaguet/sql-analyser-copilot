@@ -142,6 +142,7 @@ def answer_question(
     sql_generator_model: LLM,
     analyst_model: LLM | None = None,
     selector_model: LLM | None = None,
+    intent_model: LLM | None = None,
     databases: list[RegisteredDatabase] | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
@@ -155,6 +156,7 @@ def answer_question(
         sql_generator_model: The language model to use for SQL generation.
         analyst_model: The language model to use for result analysis (optional).
         selector_model: The language model to use for database selection (optional).
+        intent_model: The language model to use for intent classification (optional).
         databases: The registered databases available for routing (optional).
         validator: The SQLSafetyValidator instance to use for query validation (optional).
         execution_limit: The maximum number of rows to return from query execution (default: 200).
@@ -168,6 +170,7 @@ def answer_question(
         sql_generator_model=sql_generator_model,
         analyst_model=analyst_model,
         selector_model=selector_model,
+        intent_model=intent_model,
         databases=databases,
         validator=validator,
         execution_limit=execution_limit,
@@ -198,6 +201,7 @@ def stream_question(
     sql_generator_model: LLM,
     analyst_model: LLM | None = None,
     selector_model: LLM | None = None,
+    intent_model: LLM | None = None,
     databases: list[RegisteredDatabase] | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
@@ -212,6 +216,7 @@ def stream_question(
         sql_generator_model: The language model to use for SQL generation.
         analyst_model: The language model to use for result analysis (optional).
         selector_model: The language model to use for database selection (optional).
+        intent_model: The language model to use for intent classification (optional).
         databases: The registered databases available for routing (optional).
         validator: The SQLSafetyValidator instance to use for query validation (optional).
         execution_limit: The maximum number of rows to return from query execution (default: 200).
@@ -223,6 +228,7 @@ def stream_question(
         sql_generator_model=sql_generator_model,
         analyst_model=analyst_model,
         selector_model=selector_model,
+        intent_model=intent_model,
         databases=databases,
         validator=validator,
         execution_limit=execution_limit,

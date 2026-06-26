@@ -68,16 +68,18 @@ class IntentClassifierNode:
                 return {
                     "intent": intent,
                     "intent_error": message,
-                    "analysis": message,
                     "execution_error": message,
+                    "analysis": message,
+                    "metadata": {"intent_failed": True},
                 }
             else:
                 message = "Could not classify the intention. Please ask questions to retrieve information."
                 return {
                     "intent": None,
                     "intent_error": message,
-                    "analysis": message,
                     "execution_error": message,
+                    "analysis": message,
+                    "metadata": {"intent_failed": True},
                 }
 
         except json.JSONDecodeError:
@@ -85,6 +87,7 @@ class IntentClassifierNode:
             return {
                 "intent": None,
                 "intent_error": message,
-                "analysis": message,
                 "execution_error": message,
+                "analysis": message,
+                "metadata": {"intent_failed": True},
             }

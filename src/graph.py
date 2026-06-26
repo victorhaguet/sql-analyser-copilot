@@ -71,7 +71,7 @@ def _route_from_database_selector(state: SQLAgentState) -> str:
 
 
 def _route_from_intent_classifier(state: SQLAgentState) -> str:
-    return ROUTE_ABORT if state.get("intent_error") else NODE_DATABASE_SELECTOR
+    return NODE_SQL_GENERATOR if state.get("intent_error") is None else ROUTE_ABORT
 
 
 def _route_from_sql_validator(state: SQLAgentState) -> str:
@@ -99,6 +99,8 @@ def _summarize_step_outcome(update: SQLAgentState) -> str:
             return "database_selection_ambiguous"
         if metadata.get("database_selection_failed"):
             return "database_selection_failed"
+        if metadata.get("intent_failed"):
+            return "intent_failed"
         return "execution_failed"
     if "query_result" in update:
         return "query_executed"
@@ -176,6 +178,7 @@ def build_sql_agent_graph(
     sql_generator_model: LLM,
     analyst_model: LLM | None = None,
     selector_model: LLM | None = None,
+    intent_model: LLM | None = None,
     databases: list[RegisteredDatabase] | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
@@ -186,6 +189,7 @@ def build_sql_agent_graph(
         sql_generator_model (LLM): SQL generator model
         analyst_model (LLM | None, optional): SQL analyser model. Defaults to None.
         selector_model (LLM | None, optional): Database selector model. Defaults to None.
+        intent_model (LLM | None, optional): Intent classifier model. Defaults to sql_generator_model.
         databases (list[RegisteredDatabase] | None, optional): Database catalog. Defaults to None.
         validator (SQLSafetyValidator | None, optional): SQL safety validator. Defaults to None.
         execution_limit (int, optional): Maximum rows for query execution. Defaults to 200.
@@ -197,7 +201,7 @@ def build_sql_agent_graph(
     default_database = database_catalog[0].database
     graph = StateGraph(SQLAgentState)
     graph.add_node(NODE_DATABASE_SELECTOR, DatabaseSelectorNode(database_catalog, model=selector_model))
-    graph.add_node(NODE_INTENT_CLASSIFIER, IntentClassifierNode(sql_generator_model))
+    graph.add_node(NODE_INTENT_CLASSIFIER, IntentClassifierNode(intent_model or sql_generator_model))
     graph.add_node(NODE_SQL_GENERATOR, SQLGeneratorNode(sql_generator_model, default_database, database_catalog))
     graph.add_node(NODE_SQL_VALIDATOR, SQLValidatorNode(validator, database_catalog))
     graph.add_node(NODE_SQL_EXECUTOR, SQLExecutorNode(default_database, database_catalog, limit=execution_limit))
@@ -216,7 +220,7 @@ def build_sql_agent_graph(
         NODE_INTENT_CLASSIFIER,
         _route_from_intent_classifier,
         {
-            NODE_DATABASE_SELECTOR: NODE_SQL_GENERATOR,
+            NODE_SQL_GENERATOR: NODE_SQL_GENERATOR,
             ROUTE_ABORT: END,
         },
     )

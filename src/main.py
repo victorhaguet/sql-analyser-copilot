@@ -272,6 +272,7 @@ def query(payload: QueryRequest, x_user_sub: str = Header(...)) -> dict[str, Any
             sql_generator_model=app.state.sql_generator_model,
             analyst_model=app.state.analyst_model,
             selector_model=app.state.selector_model,
+            intent_model=app.state.intent_model,
             databases=databases,
             validator=app.state.validator,
             execution_limit=payload.execution_limit,
