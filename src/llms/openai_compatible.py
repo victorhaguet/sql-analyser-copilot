@@ -7,7 +7,7 @@ from typing import Any
 from langchain_openai import ChatOpenAI
 
 from utils.llm import extract_text_from_response
-from nodes.sql_generator import LLM
+from utils.nodes import LLM
 
 
 class OpenAICompatibleResponsesModel(LLM):
