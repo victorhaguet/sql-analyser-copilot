@@ -397,6 +397,7 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel("DELETE FROM Artist"),
+            intent_model=FakeModel('{"intent": "query"}'),
             databases=[register_database(SQLiteDatabase())],
         )
         result = graph.invoke({"question": "Delete artists"})
@@ -410,6 +411,7 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel("SELECT * FROM Artist"),
+            intent_model=FakeModel('{"intent": "query"}'),
             databases=[register_database(SQLiteDatabase())],
         )
         result = graph.invoke({"question": "Select from Artist"})
@@ -458,7 +460,8 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph, stream_sql_agent_execution
 
         graph = build_sql_agent_graph(
-            FakeModel("SELECT Name FROM Artist WHERE ArtistId = 1"),
+            FakeModel('SELECT Name FROM Artist WHERE ArtistId = 1'),
+            intent_model=FakeModel('{"intent": "query"}'),
             databases=[register_database(SQLiteDatabase())],
         )
 
@@ -466,12 +469,46 @@ class SQLGraphTestCase(unittest.TestCase):
 
         self.assertEqual(
             [step["node"] for step in steps],
-            ["database_selector", "sql_generator", "sql_validator", "sql_executor", "result_analyst"],
+            ["database_selector", "intent_classifier", "sql_generator", "sql_validator", "sql_executor", "result_analyst"],
         )
         self.assertEqual(steps[0]["outcome"], "database_selected")
-        self.assertEqual(steps[1]["outcome"], "sql_generated")
+        self.assertEqual(steps[1]["outcome"], "updated")
+        self.assertEqual(steps[2]["outcome"], "sql_generated")
         self.assertEqual(steps[-1]["outcome"], "analysis_ready")
         self.assertEqual(steps[-1]["state"]["analysis"][:8], "Returned")
+
+    def test_build_graph_stops_when_intent_is_modification(self) -> None:
+        """Questions that intent to modify should abort before SQL generation."""
+        from graph import build_sql_agent_graph
+
+        graph = build_sql_agent_graph(
+            FakeModel('{"intent": "modification"}'),
+            databases=[register_database(SQLiteDatabase())],
+        )
+        result = graph.invoke({"question": "Delete all artists"})
+        self.assertIn("execution_error", result)
+        self.assertIn("intent_error", result)
+        self.assertEqual(result["intent"], "modification")
+        self.assertNotIn("generated_sql", result)
+
+    def test_stream_sql_agent_execution_with_intent_classifier(self) -> None:
+        """Streaming should expose intent_classifier after database_selector."""
+        from graph import build_sql_agent_graph, stream_sql_agent_execution
+
+        graph = build_sql_agent_graph(
+            FakeModel('SELECT Name FROM Artist WHERE ArtistId = 1'),
+            intent_model=FakeModel('{"intent": "query"}'),
+            databases=[register_database(SQLiteDatabase())],
+        )
+
+        steps = list(stream_sql_agent_execution(graph, {"question": "Who is artist 1?"}))
+
+        self.assertEqual(
+            [step["node"] for step in steps],
+            ["database_selector", "intent_classifier", "sql_generator", "sql_validator", "sql_executor", "result_analyst"],
+        )
+        self.assertEqual(steps[0]["outcome"], "database_selected")
+        self.assertEqual(steps[1]["outcome"], "updated")
 
     def test_stream_sql_agent_execution_with_values_mode(self) -> None:
         """Test streaming with values mode instead of updates mode."""

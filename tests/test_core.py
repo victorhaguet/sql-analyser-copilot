@@ -162,10 +162,12 @@ class CoreTestCase(unittest.TestCase):
             "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
         )
         analyst_model = FakeModel("The first two artists are AC/DC and Accept.")
+        intent_model = FakeModel('{"intent": "query"}')
         result = answer_question(
             question="What are the first two artists?",
             sql_generator_model=generator_model,
             analyst_model=analyst_model,
+            intent_model=intent_model,
             databases=[register_database(SQLiteDatabase())],
         )
         self.assertEqual(
@@ -184,6 +186,7 @@ class CoreTestCase(unittest.TestCase):
             selector_model=FakeModel(
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
             ),
+            intent_model=FakeModel('{"intent": "query"}'),
             databases=[
                 register_database(SQLiteDatabase(), name="music", description="Music data"),
                 register_database(SQLiteDatabase(), name="sales", description="Sales data"),
@@ -201,6 +204,7 @@ class CoreTestCase(unittest.TestCase):
             selector_model=FakeModel(
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "This question is unrelated to the configured database."}'
             ),
+            intent_model=FakeModel('{"intent": "query"}'),
             databases=[register_database(SQLiteDatabase())],
         )
         self.assertIn("unrelated to the configured database", result["analysis"])
@@ -215,6 +219,7 @@ class CoreTestCase(unittest.TestCase):
             selector_model=FakeModel(
                 '{"match": false, "database": "", "candidate_databases": ["music", "sales"], "reason": "The question could be answered from either catalog."}'
             ),
+            intent_model=FakeModel('{"intent": "query"}'),
             databases=[
                 register_database(SQLiteDatabase(), name="music", description="Music data"),
                 register_database(SQLiteDatabase(), name="sales", description="Sales data"),
@@ -222,6 +227,20 @@ class CoreTestCase(unittest.TestCase):
         )
         self.assertTrue(result["metadata"]["database_selection_ambiguous"])
         self.assertEqual(result["metadata"]["candidate_databases"], ["music", "sales"])
+        self.assertNotIn("generated_sql", result)
+
+    def test_answer_question_rejects_modification_intent(self) -> None:
+        """The entrypoint should abort when user intent is modification."""
+        result = answer_question(
+            question="Delete all artists",
+            sql_generator_model=FakeModel('{"intent": "modification"}'),
+            selector_model=FakeModel(
+                '{"match": true, "database": "music", "candidate_databases": [], "reason": "Match found"}'
+            ),
+            databases=[register_database(SQLiteDatabase(), name="music", description="Music data")],
+        )
+        self.assertIn("Modifications are not allowed", result["analysis"])
+        self.assertEqual(result["intent"], "modification")
         self.assertNotIn("generated_sql", result)
 
     def test_answer_question_can_include_execution_trace(self) -> None:
@@ -234,6 +253,7 @@ class CoreTestCase(unittest.TestCase):
                     "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
+                intent_model=FakeModel('{"intent": "query"}'),
                 databases=[register_database(SQLiteDatabase())],
                 include_trace=True,
                 trace_log_dir=temp_dir,
@@ -255,6 +275,7 @@ class CoreTestCase(unittest.TestCase):
                     "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
+                intent_model=FakeModel('{"intent": "query"}'),
                 databases=[register_database(SQLiteDatabase())],
                 include_trace=True,
                 trace_log_dir=temp_dir,
@@ -284,6 +305,23 @@ class CoreTestCase(unittest.TestCase):
         )
         self.assertNotIn("execution_trace", result.get("metadata", {}))
         self.assertNotIn("trace_log_path", result.get("metadata", {}))
+
+    def test_stream_question_returns_intent_classifier_failure_step(self) -> None:
+        """Streaming should expose early aborts at the intent_classifier step."""
+
+        steps = list(
+            stream_question(
+                question="Delete all artists",
+                sql_generator_model=FakeModel('{"intent": "modification"}'),
+                intent_model=FakeModel('{"intent": "modification"}'),
+                databases=[register_database(SQLiteDatabase(), name="music", description="Music data")],
+            )
+        )
+
+        self.assertEqual(len(steps), 2)
+        self.assertEqual(steps[0]["node"], "database_selector")
+        self.assertEqual(steps[1]["node"], "intent_classifier")
+        self.assertEqual(steps[1]["outcome"], "intent_failed")
 
     def test_stream_question_returns_database_selection_failure_step(self) -> None:
         """Streaming should expose early aborts at the selector step."""
@@ -319,6 +357,7 @@ class CoreTestCase(unittest.TestCase):
                 question="Who is the first artist?",
                 sql_generator_model=generator_model,
                 analyst_model=analyst_model,
+                intent_model=FakeModel('{"intent": "query"}'),
                 databases=[register_database(SQLiteDatabase())],
             )
         )
