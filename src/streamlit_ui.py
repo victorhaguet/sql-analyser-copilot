@@ -48,6 +48,7 @@ def build_display_context(response_data: dict[str, Any]) -> dict[str, Any]:
     # Get the AI summary
     ai_answer = (
         response_data.get("analysis")
+        or response_data.get("intent_error")
         or response_data.get("execution_error")
         or response_data.get("sql_validation_error")
         or "No analysis returned."
@@ -62,7 +63,7 @@ def build_display_context(response_data: dict[str, Any]) -> dict[str, Any]:
         "schema_overview": response_data.get("schema_overview") or "",
         "metadata": response_data.get("metadata") or {},
         "has_error": bool(
-            response_data.get("execution_error") or response_data.get("sql_validation_error")
+            response_data.get("execution_error") or response_data.get("sql_validation_error") or response_data.get("intent_error")
         ),
     }
 

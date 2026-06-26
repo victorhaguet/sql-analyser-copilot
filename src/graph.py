@@ -8,6 +8,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import Command 
 
 from nodes.database_selector import DatabaseSelectorNode
+from nodes.intent_classifier import IntentClassifierNode
 from nodes.result_analyst import ResultAnalystNode
 from nodes.sql_executor import SQLExecutorNode
 from nodes.sql_generator import LLM, SQLGeneratorNode
@@ -21,6 +22,7 @@ SQLAgentStateUpdate = SQLAgentState
 TraceStreamMode = Literal["updates", "values"]
 
 NODE_DATABASE_SELECTOR = "database_selector"
+NODE_INTENT_CLASSIFIER = "intent_classifier"
 NODE_SQL_GENERATOR = "sql_generator"
 NODE_SQL_VALIDATOR = "sql_validator"
 NODE_SQL_EXECUTOR = "sql_executor"
@@ -66,6 +68,10 @@ def _route_after_execution(state: SQLAgentState) -> str:
 
 def _route_from_database_selector(state: SQLAgentState) -> str:
     return _route_after_database_selection(state)
+
+
+def _route_from_intent_classifier(state: SQLAgentState) -> str:
+    return ROUTE_ABORT if state.get("intent_error") else NODE_DATABASE_SELECTOR
 
 
 def _route_from_sql_validator(state: SQLAgentState) -> str:
@@ -191,6 +197,7 @@ def build_sql_agent_graph(
     default_database = database_catalog[0].database
     graph = StateGraph(SQLAgentState)
     graph.add_node(NODE_DATABASE_SELECTOR, DatabaseSelectorNode(database_catalog, model=selector_model))
+    graph.add_node(NODE_INTENT_CLASSIFIER, IntentClassifierNode(sql_generator_model))
     graph.add_node(NODE_SQL_GENERATOR, SQLGeneratorNode(sql_generator_model, default_database, database_catalog))
     graph.add_node(NODE_SQL_VALIDATOR, SQLValidatorNode(validator, database_catalog))
     graph.add_node(NODE_SQL_EXECUTOR, SQLExecutorNode(default_database, database_catalog, limit=execution_limit))
@@ -201,7 +208,15 @@ def build_sql_agent_graph(
         NODE_DATABASE_SELECTOR,
         _route_from_database_selector,
         {
-            NODE_SQL_GENERATOR: NODE_SQL_GENERATOR,
+            NODE_SQL_GENERATOR: NODE_INTENT_CLASSIFIER,
+            ROUTE_ABORT: END,
+        },
+    )
+    graph.add_conditional_edges(
+        NODE_INTENT_CLASSIFIER,
+        _route_from_intent_classifier,
+        {
+            NODE_DATABASE_SELECTOR: NODE_SQL_GENERATOR,
             ROUTE_ABORT: END,
         },
     )

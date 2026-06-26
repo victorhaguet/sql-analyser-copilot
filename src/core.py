@@ -125,6 +125,8 @@ def _serialize_state(state: SQLAgentState, question: str) -> dict[str, Any]:
         "question": question,
         "schema_overview": state.get("schema_overview"),
         "selected_database": state.get("selected_database"),
+        "intent": state.get("intent"),
+        "intent_error": state.get("intent_error"),
         "generated_sql": state.get("generated_sql"),
         "validated_sql": state.get("validated_sql"),
         "sql_validation_error": state.get("sql_validation_error"),
