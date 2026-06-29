@@ -59,12 +59,13 @@ def get_api_client() -> httpx.Client:
 def render_logout_button() -> None:
     """Render the sign-out button with user information."""
     user = st.session_state.get("user", {})
-    header_columns = st.columns([5, 1])
-    with header_columns[0]:
+    
+    with st.container(horizontal=True, vertical_alignment="center"):
         st.caption(f"Signed in as {user.get('username', '')}")
-    with header_columns[1]:
-        if st.button("Sign out", use_container_width=True):
-            logout()
+        st.space("stretch")
+
+    if st.button("Sign out"):
+        logout()
 
 
 def logout() -> None:
