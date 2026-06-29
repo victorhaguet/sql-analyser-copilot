@@ -22,3 +22,11 @@ class SQLAgentState(TypedDict, total=False):
     execution_error: str | None # Error message if query execution fails
     analysis: str # Analysis of the query result
     metadata: dict[str, Any] # Additional metadata related to the query and its execution
+    user_role: str # Role of the authenticated user
+    is_authorized: bool # Whether the user has authorization to proceed
+    authorization_error: str | None # Error message if authorization fails
+    needs_confirmation: bool # Whether user confirmation is required before execution
+    execution_requested: bool # Whether execution is pending user confirmation
+    execution_confirmed: bool # Whether user has confirmed execution
+    thread_id: str # Thread identifier used to resume an interrupted graph
+    interrupt: dict[str, Any] # Serialized LangGraph interrupt payload

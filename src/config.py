@@ -125,5 +125,6 @@ def create_app(
     fastapi_app.state.execution_limit = execution_limit
     fastapi_app.state.enable_trace = enable_trace
     fastapi_app.state.trace_log_dir = trace_log_dir
+    fastapi_app.state.pending_approval_sessions = {}
 
     return fastapi_app
