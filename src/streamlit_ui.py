@@ -23,6 +23,10 @@ def build_empty_result_state() -> dict[str, object]:
         "metadata": {},
         "has_error": False,
         "error_message": "",
+        "execution_requested": False,
+        "execution_confirmed": False,
+        "thread_id": "",
+        "interrupt": None,
     }
 
 
@@ -62,6 +66,10 @@ def build_display_context(response_data: dict[str, Any]) -> dict[str, Any]:
         "query_result": response_data.get("query_result"),
         "schema_overview": response_data.get("schema_overview") or "",
         "metadata": response_data.get("metadata") or {},
+        "execution_requested": bool(response_data.get("execution_requested")),
+        "execution_confirmed": bool(response_data.get("execution_confirmed")),
+        "thread_id": response_data.get("thread_id") or "",
+        "interrupt": response_data.get("interrupt"),
         "has_error": bool(
             response_data.get("execution_error") or response_data.get("sql_validation_error") or response_data.get("intent_error")
         ),
