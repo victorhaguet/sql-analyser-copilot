@@ -12,6 +12,7 @@ from state import SQLAgentState
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "intent_classifier.j2"
+ERROR_MESSAGE = "Could not classify the intention. Please ask questions to retrieve information or to modify the database."
 
 
 class IntentClassifierNode:
@@ -62,18 +63,16 @@ class IntentClassifierNode:
                 return {
                     "intent": intent,
                     "intent_error": None,
+                    "needs_confirmation": False,
                 }
             elif intent == "modification":
-                message = "Modifications are not allowed. Please ask questions to retrieve information."
                 return {
                     "intent": intent,
-                    "intent_error": message,
-                    "execution_error": message,
-                    "analysis": message,
-                    "metadata": {"intent_failed": True},
+                    "intent_error": None,
+                    "needs_confirmation": True,
                 }
             else:
-                message = "Could not classify the intention. Please ask questions to retrieve information."
+                message = ERROR_MESSAGE
                 return {
                     "intent": None,
                     "intent_error": message,
@@ -83,7 +82,7 @@ class IntentClassifierNode:
                 }
 
         except json.JSONDecodeError:
-            message = "Could not classify the intention. Please ask questions to retrieve information."
+            message = ERROR_MESSAGE
             return {
                 "intent": None,
                 "intent_error": message,
