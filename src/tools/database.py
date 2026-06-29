@@ -211,6 +211,8 @@ class SQLiteDatabase:
                 columns = [column[0] for column in cursor.description or []]
                 rows = cursor.fetchmany(row_limit)
                 extra_row = cursor.fetchone()
+
+                conn.commit()
         except sqlite3.Error as exc:
             raise DatabaseError(str(exc)) from exc
 
