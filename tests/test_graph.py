@@ -6,6 +6,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from uuid import uuid4
 
 for parent in Path(__file__).resolve().parents:
     if (parent / "src").exists():
@@ -13,11 +14,17 @@ for parent in Path(__file__).resolve().parents:
         break
 
 from tools.database import SQLiteDatabase, register_database
-from graph import _normalize_stream_event
+from langgraph.types import Interrupt
+from graph import INTERRUPT_EVENT, _normalize_stream_event
 from state import SQLAgentState
 from graph import _summarize_step_outcome
 
 SQLAgentStateUpdate = SQLAgentState
+
+
+def build_thread_config() -> dict[str, dict[str, str]]:
+    """Create a LangGraph config with a unique thread id for tests."""
+    return {"configurable": {"thread_id": uuid4().hex}}
 
 
 class TestNormalizeStreamEvent(unittest.TestCase):
@@ -104,6 +111,25 @@ class TestNormalizeStreamEvent(unittest.TestCase):
         with self.assertRaises(TypeError):
             _normalize_stream_event(event, current_state, "updates")
 
+    def test_normalize_stream_event_handles_interrupt_event(self) -> None:
+        """Interrupt events should be normalized into approval state."""
+        event = {INTERRUPT_EVENT: [Interrupt({"draft": "DELETE FROM Artist"})]}
+        node_name, update, state = _normalize_stream_event(event, {}, "updates")
+        self.assertEqual(node_name, INTERRUPT_EVENT)
+        self.assertEqual(update["interrupt"], {"draft": "DELETE FROM Artist"})
+        self.assertTrue(update["execution_requested"])
+        self.assertEqual(state["interrupt"], {"draft": "DELETE FROM Artist"})
+
+    def test_normalize_stream_event_rejects_empty_interrupt_list(self) -> None:
+        """Interrupt events without payloads should fail fast."""
+        with self.assertRaises(TypeError):
+            _normalize_stream_event({INTERRUPT_EVENT: []}, {}, "updates")
+
+    def test_normalize_stream_event_rejects_non_interrupt_payload(self) -> None:
+        """Interrupt events should require a LangGraph Interrupt object."""
+        with self.assertRaises(TypeError):
+            _normalize_stream_event({INTERRUPT_EVENT: ["invalid"]}, {}, "updates")
+
 
 class TestSummarizeStepOutcome(unittest.TestCase):
     """Test the _summarize_step_outcome function."""
@@ -158,6 +184,16 @@ class TestSummarizeStepOutcome(unittest.TestCase):
         """Test summarization for default case."""
         result = _summarize_step_outcome({"metadata": {}})
         self.assertEqual(result, "updated")
+
+    def test_summarize_authorization_failed(self) -> None:
+        """Authorization errors should use the dedicated outcome label."""
+        result = _summarize_step_outcome({"authorization_error": "denied"})
+        self.assertEqual(result, "authorization_failed")
+
+    def test_summarize_execution_pending_approval(self) -> None:
+        """Interrupt state should be summarized as pending approval."""
+        result = _summarize_step_outcome({"interrupt": {"draft": "DELETE"}})
+        self.assertEqual(result, "execution_pending_approval")
 
 
 class FakeResponseTestCase(unittest.TestCase):
@@ -400,7 +436,7 @@ class SQLGraphTestCase(unittest.TestCase):
             intent_model=FakeModel('{"intent": "query"}'),
             databases=[register_database(SQLiteDatabase())],
         )
-        result = graph.invoke({"question": "Delete artists"})
+        result = graph.invoke({"question": "Delete artists"}, config=build_thread_config())
         self.assertIn("sql_validation_error", result)
         self.assertNotIn("query_result", result)
 
@@ -414,7 +450,10 @@ class SQLGraphTestCase(unittest.TestCase):
             intent_model=FakeModel('{"intent": "query"}'),
             databases=[register_database(SQLiteDatabase())],
         )
-        result = graph.invoke({"question": "Select from Artist"})
+        result = graph.invoke(
+            {"question": "Select from Artist"},
+            config=build_thread_config(),
+        )
         self.assertIn("query_result", result)
         self.assertIsNone(result.get("execution_error"))
         self.assertIsNotNone(result["query_result"])
@@ -433,7 +472,10 @@ class SQLGraphTestCase(unittest.TestCase):
                 register_database(SQLiteDatabase(), name="sales", description="Sales data"),
             ],
         )
-        result = graph.invoke({"question": "What is the weather in Berlin?"})
+        result = graph.invoke(
+            {"question": "What is the weather in Berlin?"},
+            config=build_thread_config(),
+        )
         self.assertIn("execution_error", result)
         self.assertNotIn("generated_sql", result)
 
@@ -451,7 +493,10 @@ class SQLGraphTestCase(unittest.TestCase):
                 register_database(SQLiteDatabase(), name="sales", description="Sales data"),
             ],
         )
-        result = graph.invoke({"question": "Show me recent invoice activity."})
+        result = graph.invoke(
+            {"question": "Show me recent invoice activity."},
+            config=build_thread_config(),
+        )
         self.assertTrue(result["metadata"]["database_selection_ambiguous"])
         self.assertNotIn("generated_sql", result)
 
@@ -485,9 +530,11 @@ class SQLGraphTestCase(unittest.TestCase):
             FakeModel('{"intent": "modification"}'),
             databases=[register_database(SQLiteDatabase())],
         )
-        result = graph.invoke({"question": "Delete all artists"})
-        self.assertIn("execution_error", result)
-        self.assertIn("intent_error", result)
+        result = graph.invoke(
+            {"question": "Delete all artists"},
+            config=build_thread_config(),
+        )
+        self.assertIn("authorization_error", result)
         self.assertEqual(result["intent"], "modification")
         self.assertNotIn("generated_sql", result)
 
@@ -505,7 +552,14 @@ class SQLGraphTestCase(unittest.TestCase):
 
         self.assertEqual(
             [step["node"] for step in steps],
-            ["database_selector", "intent_classifier", "sql_generator", "sql_validator", "sql_executor", "result_analyst"],
+            [
+                "database_selector",
+                "intent_classifier",
+                "sql_generator",
+                "sql_validator",
+                "sql_executor",
+                "result_analyst",
+            ],
         )
         self.assertEqual(steps[0]["outcome"], "database_selected")
         self.assertEqual(steps[1]["outcome"], "updated")

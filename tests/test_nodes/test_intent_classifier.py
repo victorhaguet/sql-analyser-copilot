@@ -33,37 +33,41 @@ class IntentClassifierNodeTestCase(unittest.TestCase):
         self.assertIsNone(result["intent_error"])
 
     def test_classifies_modification_intent(self) -> None:
-        """Test that a modification question is rejected."""
+        """Test that a modification question is flagged for confirmation."""
         node = IntentClassifierNode(FakeModel('{"intent": "modification"}'))
         result = node({"question": "Delete all artists"})
 
         self.assertEqual(result["intent"], "modification")
-        self.assertIn("Modifications are not allowed", result["intent_error"])
-        self.assertIn("Modifications are not allowed", result["analysis"])
+        self.assertIsNone(result["intent_error"])
+        self.assertTrue(result["needs_confirmation"])
+        self.assertNotIn("analysis", result)
 
     def test_classifies_insert_as_modification(self) -> None:
-        """Test that INSERT statements are classified as modification."""
+        """Test that INSERT requests are flagged for confirmation."""
         node = IntentClassifierNode(FakeModel('{"intent": "modification"}'))
         result = node({"question": "Add a new artist"})
 
         self.assertEqual(result["intent"], "modification")
-        self.assertIn("Modifications are not allowed", result["intent_error"])
+        self.assertTrue(result["needs_confirmation"])
+        self.assertIsNone(result["intent_error"])
 
     def test_classifies_update_as_modification(self) -> None:
-        """Test that UPDATE statements are classified as modification."""
+        """Test that UPDATE requests are flagged for confirmation."""
         node = IntentClassifierNode(FakeModel('{"intent": "modification"}'))
         result = node({"question": "Update artist names"})
 
         self.assertEqual(result["intent"], "modification")
-        self.assertIn("Modifications are not allowed", result["intent_error"])
+        self.assertTrue(result["needs_confirmation"])
+        self.assertIsNone(result["intent_error"])
 
     def test_classifies_delete_as_modification(self) -> None:
-        """Test that DELETE statements are classified as modification."""
+        """Test that DELETE requests are flagged for confirmation."""
         node = IntentClassifierNode(FakeModel('{"intent": "modification"}'))
         result = node({"question": "Delete old records"})
 
         self.assertEqual(result["intent"], "modification")
-        self.assertIn("Modifications are not allowed", result["intent_error"])
+        self.assertTrue(result["needs_confirmation"])
+        self.assertIsNone(result["intent_error"])
 
     def test_handles_unparseable_json(self) -> None:
         """Test that unparseable JSON returns an error."""
@@ -93,12 +97,11 @@ class IntentClassifierNodeTestCase(unittest.TestCase):
         self.assertIn("Could not classify", result["analysis"])
 
     def test_error_message_shown_in_ui(self) -> None:
-        """Test that intent_error message is suitable for UI display."""
+        """Modification classification should not surface a classifier error."""
         node = IntentClassifierNode(FakeModel('{"intent": "modification"}'))
         result = node({"question": "DROP TABLE Artist"})
 
-        self.assertIsNotNone(result["intent_error"])
-        self.assertIsNotNone(result["analysis"])
-        self.assertIsNotNone(result["execution_error"])
-        self.assertEqual(result["intent_error"], result["analysis"])
-        self.assertEqual(result["analysis"], result["execution_error"])
+        self.assertIsNone(result["intent_error"])
+        self.assertTrue(result["needs_confirmation"])
+        self.assertNotIn("analysis", result)
+        self.assertNotIn("execution_error", result)

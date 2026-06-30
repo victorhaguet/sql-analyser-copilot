@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 for parent in Path(__file__).resolve().parents:
     if (parent / "src").exists():
@@ -242,10 +243,11 @@ class TracingTestCase(unittest.TestCase):
             },
         ]
         
-        log_path = write_trace_log("Test question", trace, None)
-        
-        self.assertTrue(log_path.exists())
-        self.assertTrue(str(log_path).startswith(str(TRACE_LOG_DIR)))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("tracing.TRACE_LOG_DIR", Path(temp_dir)):
+                log_path = write_trace_log("Test question", trace, None)
+                self.assertTrue(log_path.exists())
+                self.assertTrue(str(log_path).startswith(str(Path(temp_dir))))
 
 
 if __name__ == "__main__":

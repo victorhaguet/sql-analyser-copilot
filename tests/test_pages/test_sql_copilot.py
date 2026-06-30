@@ -1,6 +1,7 @@
 """Tests for the SQL copilot page module."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import httpx
 import sys
 import unittest
@@ -16,6 +17,7 @@ import streamlit as st
 from pages.sql_copilot import (
     _initialize_state,
     call_api,
+    render_sql_copilot_page,
     _sync_selected_databases,
     DEFAULT_QUESTION,
 )
@@ -204,6 +206,51 @@ class SyncSelectedDatabasesTestCase(SqlCopilotTestCase):
 
         result = _sync_selected_databases(databases)
         self.assertEqual(result, ["db1"])
+
+
+class RenderSqlCopilotPageTestCase(SqlCopilotTestCase):
+    """Test render_sql_copilot_page behavior."""
+
+    @patch("pages.sql_copilot.st.container", side_effect=lambda **_: nullcontext())
+    @patch("pages.sql_copilot.st.spinner", side_effect=lambda *_args, **_kwargs: nullcontext())
+    @patch("pages.sql_copilot._render_results")
+    @patch("pages.sql_copilot.call_api")
+    @patch("pages.sql_copilot._render_question_panel", return_value=True)
+    @patch("pages.sql_copilot._render_database_catalog", return_value=["music"])
+    @patch("pages.sql_copilot._render_header")
+    @patch("pages.sql_copilot.render_logout_button")
+    @patch("pages.sql_copilot.is_authenticated_page", return_value=True)
+    def test_renders_current_run_result(
+        self,
+        _mock_is_authenticated: MagicMock,
+        _mock_render_logout_button: MagicMock,
+        _mock_render_header: MagicMock,
+        _mock_render_database_catalog: MagicMock,
+        _mock_render_question_panel: MagicMock,
+        mock_call_api: MagicMock,
+        mock_render_results: MagicMock,
+        _mock_spinner: MagicMock,
+        _mock_container: MagicMock,
+    ) -> None:
+        """Test that the page renders the latest API result in the same run."""
+        st.session_state["question_input"] = "Current question"
+        st.session_state["execution_limit"] = 123
+        st.session_state["result_state"] = {
+            "question": "Previous question",
+            "sql_query": "SELECT old",
+            "ai_answer": "Previous analysis",
+        }
+        latest_result = {
+            "question": "Current question",
+            "sql_query": "SELECT new",
+            "ai_answer": "Current analysis",
+        }
+        mock_call_api.return_value = latest_result
+
+        render_sql_copilot_page()
+
+        self.assertEqual(st.session_state["result_state"], latest_result)
+        mock_render_results.assert_called_once_with(latest_result)
 
 
 if __name__ == "__main__":

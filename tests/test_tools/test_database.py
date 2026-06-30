@@ -1,7 +1,10 @@
 """Test the database module."""
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from shutil import copy2
+from unittest.mock import patch
 
 for parent in Path(__file__).resolve().parents:
     if (parent / "src").exists():
@@ -9,13 +12,14 @@ for parent in Path(__file__).resolve().parents:
         break
 
 from tools.database import (
-    DEFAULT_DB_PATH,
     DatabaseError,
     DatabaseNotFoundError,
     QueryResult,
     SQLiteDatabase,
     get_default_database,
 )
+
+FIXTURE_DB_PATH = Path(__file__).resolve().parents[1] / "test_db" / "Chinook_Sqlite.sqlite"
 
 
 class SQLiteDatabaseTestCase(unittest.TestCase):
@@ -24,18 +28,27 @@ class SQLiteDatabaseTestCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.database = SQLiteDatabase()
+        cls.database = SQLiteDatabase(FIXTURE_DB_PATH)
 
-    def test_default_database_path_exists(self) -> None:
-        """Test that the default database path exists and is correctly set in the SQLiteDatabase instance."""
-        self.assertTrue(DEFAULT_DB_PATH.exists())
-        self.assertEqual(self.database.database_path, DEFAULT_DB_PATH.resolve())
+    def test_fixture_database_path_exists(self) -> None:
+        """Test that the committed fixture database exists and is used by the tests."""
+        self.assertTrue(FIXTURE_DB_PATH.exists())
+        self.assertEqual(self.database.database_path, FIXTURE_DB_PATH.resolve())
 
     def test_get_default_database_returns_database_instance(self) -> None:
-        """Test that get_default_database returns a SQLiteDatabase instance."""
-        database = get_default_database()
+        """Test that get_default_database discovers a database from a data directory."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            data_dir = project_root / "data"
+            data_dir.mkdir()
+            fixture_copy = data_dir / "fixture.sqlite"
+            copy2(FIXTURE_DB_PATH, fixture_copy)
+
+            with patch("tools.database._project_root", project_root):
+                database = get_default_database()
+
         self.assertIsInstance(database, SQLiteDatabase)
-        self.assertEqual(database.database_path, DEFAULT_DB_PATH.resolve())
+        self.assertEqual(database.database_path, fixture_copy.resolve())
 
     def test_missing_database_path_raises_error(self) -> None:
         """Test that initializing SQLiteDatabase with a missing path raises DatabaseNotFoundError."""
@@ -117,7 +130,7 @@ class SQLiteDatabaseTestCase(unittest.TestCase):
     def test_describe_returns_path_and_tables(self) -> None:
         """Test that describe returns the database path and tables."""
         description = self.database.describe()
-        self.assertEqual(description["database_path"], str(DEFAULT_DB_PATH.resolve()))
+        self.assertEqual(description["database_path"], str(FIXTURE_DB_PATH.resolve()))
         self.assertIn("Artist", description["tables"])
 
 
