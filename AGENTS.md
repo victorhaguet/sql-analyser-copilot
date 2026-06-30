@@ -8,7 +8,7 @@ For each new modification, follow these steps:
 
 1. Read the CODEMAP.md to understand the project structure
 2. Identify the code part where modification/addition of code must be done
-3. Read the AGENT_CONTEXT.md of those places, and only read files if it is strictly necessary
+3. Read the AGENTS_CONTEXT.md of those places, and only read files if it is strictly necessary
 4. If you are in plan mode, provide a plan. If you are in build mode, build the modifications
 
 ## Repository Specificities
