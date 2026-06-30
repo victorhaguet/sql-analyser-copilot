@@ -18,8 +18,7 @@ from tools.database import (
     SQLiteDatabase,
     get_default_database,
 )
-
-FIXTURE_DB_PATH = Path(__file__).resolve().parents[1] / "test_db" / "Chinook_Sqlite.sqlite"
+from tests.test_db.helpers import FIXTURE_DB_PATH, fixture_database
 
 
 class SQLiteDatabaseTestCase(unittest.TestCase):
@@ -28,7 +27,7 @@ class SQLiteDatabaseTestCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.database = SQLiteDatabase(FIXTURE_DB_PATH)
+        cls.database = fixture_database()
 
     def test_fixture_database_path_exists(self) -> None:
         """Test that the committed fixture database exists and is used by the tests."""

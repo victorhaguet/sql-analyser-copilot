@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from nodes.sql_generator import SQLGeneratorNode
-from tools.database import SQLiteDatabase
+from tests.test_db.helpers import fixture_database
 
 
 class FakeResponse:
@@ -28,7 +28,7 @@ class SQLGeneratorNodeTestCase(unittest.TestCase):
 
     def test_uses_schema_and_strips_code_fence(self) -> None:
         model = FakeModel("```sql\nSELECT Name FROM Artist LIMIT 1\n```")
-        node = SQLGeneratorNode(model=model, database=SQLiteDatabase())
+        node = SQLGeneratorNode(model=model, database=fixture_database())
         result = node({"question": "Show one artist"})
 
         self.assertEqual(result["generated_sql"], "SELECT Name FROM Artist LIMIT 1")

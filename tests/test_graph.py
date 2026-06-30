@@ -13,11 +13,11 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
-from tools.database import SQLiteDatabase, register_database
 from langgraph.types import Interrupt
 from graph import INTERRUPT_EVENT, _normalize_stream_event
 from state import SQLAgentState
 from graph import _summarize_step_outcome
+from tests.test_db.helpers import fixture_registered_database
 
 SQLAgentStateUpdate = SQLAgentState
 
@@ -434,7 +434,7 @@ class SQLGraphTestCase(unittest.TestCase):
         graph = build_sql_agent_graph(
             FakeModel("DELETE FROM Artist"),
             intent_model=FakeModel('{"intent": "query"}'),
-            databases=[register_database(SQLiteDatabase())],
+            databases=[fixture_registered_database()],
         )
         result = graph.invoke({"question": "Delete artists"}, config=build_thread_config())
         self.assertIn("sql_validation_error", result)
@@ -448,7 +448,7 @@ class SQLGraphTestCase(unittest.TestCase):
         graph = build_sql_agent_graph(
             FakeModel("SELECT * FROM Artist"),
             intent_model=FakeModel('{"intent": "query"}'),
-            databases=[register_database(SQLiteDatabase())],
+            databases=[fixture_registered_database()],
         )
         result = graph.invoke(
             {"question": "Select from Artist"},
@@ -468,8 +468,8 @@ class SQLGraphTestCase(unittest.TestCase):
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
             ),
             databases=[
-                register_database(SQLiteDatabase(), name="music", description="Music data"),
-                register_database(SQLiteDatabase(), name="sales", description="Sales data"),
+                fixture_registered_database(name="music", description="Music data"),
+                fixture_registered_database(name="sales", description="Sales data"),
             ],
         )
         result = graph.invoke(
@@ -489,8 +489,8 @@ class SQLGraphTestCase(unittest.TestCase):
                 '{"match": false, "database": "", "candidate_databases": ["music", "sales"], "reason": "The question could be answered from either catalog."}'
             ),
             databases=[
-                register_database(SQLiteDatabase(), name="music", description="Music data"),
-                register_database(SQLiteDatabase(), name="sales", description="Sales data"),
+                fixture_registered_database(name="music", description="Music data"),
+                fixture_registered_database(name="sales", description="Sales data"),
             ],
         )
         result = graph.invoke(
@@ -507,7 +507,7 @@ class SQLGraphTestCase(unittest.TestCase):
         graph = build_sql_agent_graph(
             FakeModel('SELECT Name FROM Artist WHERE ArtistId = 1'),
             intent_model=FakeModel('{"intent": "query"}'),
-            databases=[register_database(SQLiteDatabase())],
+            databases=[fixture_registered_database()],
         )
 
         steps = list(stream_sql_agent_execution(graph, {"question": "Who is artist 1?"}))
@@ -528,7 +528,7 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel('{"intent": "modification"}'),
-            databases=[register_database(SQLiteDatabase())],
+            databases=[fixture_registered_database()],
         )
         result = graph.invoke(
             {"question": "Delete all artists"},
@@ -545,7 +545,7 @@ class SQLGraphTestCase(unittest.TestCase):
         graph = build_sql_agent_graph(
             FakeModel('SELECT Name FROM Artist WHERE ArtistId = 1'),
             intent_model=FakeModel('{"intent": "query"}'),
-            databases=[register_database(SQLiteDatabase())],
+            databases=[fixture_registered_database()],
         )
 
         steps = list(stream_sql_agent_execution(graph, {"question": "Who is artist 1?"}))
@@ -571,7 +571,7 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel("SELECT Name FROM Artist WHERE ArtistId = 1"),
-            databases=[register_database(SQLiteDatabase())],
+            databases=[fixture_registered_database()],
         )
 
         steps = list(

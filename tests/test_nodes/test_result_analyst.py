@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 
 from nodes.result_analyst import ResultAnalystNode
-from tools.database import SQLiteDatabase
-
-FIXTURE_DB_PATH = Path(__file__).resolve().parents[1] / "test_db" / "Chinook_Sqlite.sqlite"
+from tests.test_db.helpers import fixture_database
 
 
 class ResultAnalystNodeTestCase(unittest.TestCase):
     """Test result analysis behavior."""
 
     def test_has_non_llm_fallback(self) -> None:
-        database = SQLiteDatabase(FIXTURE_DB_PATH)
+        database = fixture_database()
         query_result = database.execute_command(
             "SELECT Name FROM Artist ORDER BY ArtistId LIMIT 1"
         )

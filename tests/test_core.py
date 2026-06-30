@@ -16,7 +16,7 @@ for parent in Path(__file__).resolve().parents:
         break
 
 from langgraph.types import Interrupt
-from tools.database import SQLiteDatabase, register_database, DatabaseError
+from tools.database import DatabaseError
 from core import (
     PendingApprovalSession,
     answer_question,
@@ -32,6 +32,7 @@ from core import (
     _serialize_query_result,
     _serialize_state,
 )
+from tests.test_db.helpers import fixture_registered_database
 
 
 class FakeResponse:
@@ -217,7 +218,7 @@ class CoreTestCase(unittest.TestCase):
             sql_generator_model=generator_model,
             analyst_model=analyst_model,
             intent_model=intent_model,
-            databases=[register_database(SQLiteDatabase())],
+            databases=[fixture_registered_database()],
         )
         self.assertEqual(
             result["validated_sql"],
@@ -242,7 +243,7 @@ class CoreTestCase(unittest.TestCase):
                 sql_generator_model=FakeModel(sql_query),
                 analyst_model=FakeModel("Top artists returned."),
                 intent_model=FakeModel('{"intent": "query"}'),
-                databases=[register_database(SQLiteDatabase())],
+                databases=[fixture_registered_database()],
                 include_trace=True,
                 trace_log_dir=temp_dir,
             )
@@ -264,8 +265,8 @@ class CoreTestCase(unittest.TestCase):
             ),
             intent_model=FakeModel('{"intent": "query"}'),
             databases=[
-                register_database(SQLiteDatabase(), name="music", description="Music data"),
-                register_database(SQLiteDatabase(), name="sales", description="Sales data"),
+                fixture_registered_database(name="music", description="Music data"),
+                fixture_registered_database(name="sales", description="Sales data"),
             ],
         )
         self.assertIn("No configured database matches.", result["analysis"])
@@ -281,7 +282,7 @@ class CoreTestCase(unittest.TestCase):
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "This question is unrelated to the configured database."}'
             ),
             intent_model=FakeModel('{"intent": "query"}'),
-            databases=[register_database(SQLiteDatabase())],
+            databases=[fixture_registered_database()],
         )
         self.assertIn("unrelated to the configured database", result["analysis"])
         self.assertNotIn("generated_sql", result)
@@ -297,8 +298,8 @@ class CoreTestCase(unittest.TestCase):
             ),
             intent_model=FakeModel('{"intent": "query"}'),
             databases=[
-                register_database(SQLiteDatabase(), name="music", description="Music data"),
-                register_database(SQLiteDatabase(), name="sales", description="Sales data"),
+                fixture_registered_database(name="music", description="Music data"),
+                fixture_registered_database(name="sales", description="Sales data"),
             ],
         )
         self.assertTrue(result["metadata"]["database_selection_ambiguous"])
@@ -314,7 +315,7 @@ class CoreTestCase(unittest.TestCase):
                 '{"match": true, "database": "music", "candidate_databases": [], "reason": "Match found"}'
             ),
             intent_model=FakeModel('{"intent": "modification"}'),
-            databases=[register_database(SQLiteDatabase(), name="music", description="Music data")],
+            databases=[fixture_registered_database(name="music", description="Music data")],
         )
         self.assertIn("authorization_error", result)
         self.assertEqual(result["intent"], "modification")
@@ -331,7 +332,7 @@ class CoreTestCase(unittest.TestCase):
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
                 intent_model=FakeModel('{"intent": "query"}'),
-                databases=[register_database(SQLiteDatabase())],
+                databases=[fixture_registered_database()],
                 include_trace=True,
                 trace_log_dir=temp_dir,
             )
@@ -353,7 +354,7 @@ class CoreTestCase(unittest.TestCase):
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
                 intent_model=FakeModel('{"intent": "query"}'),
-                databases=[register_database(SQLiteDatabase())],
+                databases=[fixture_registered_database()],
                 include_trace=True,
                 trace_log_dir=temp_dir,
             )
@@ -377,7 +378,7 @@ class CoreTestCase(unittest.TestCase):
                 "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
             ),
             analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
-            databases=[register_database(SQLiteDatabase())],
+            databases=[fixture_registered_database()],
             include_trace=False,
         )
         self.assertNotIn("execution_trace", result.get("metadata", {}))
@@ -391,7 +392,7 @@ class CoreTestCase(unittest.TestCase):
                 question="Delete all artists",
                 sql_generator_model=FakeModel("DELETE FROM Artist"),
                 intent_model=FakeModel('{"intent": "modification"}'),
-                databases=[register_database(SQLiteDatabase(), name="music", description="Music data")],
+                databases=[fixture_registered_database(name="music", description="Music data")],
             )
         )
 
@@ -412,8 +413,8 @@ class CoreTestCase(unittest.TestCase):
                     '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
                 ),
                 databases=[
-                    register_database(SQLiteDatabase(), name="music", description="Music data"),
-                    register_database(SQLiteDatabase(), name="sales", description="Sales data"),
+                    fixture_registered_database(name="music", description="Music data"),
+                    fixture_registered_database(name="sales", description="Sales data"),
                 ],
             )
         )
@@ -436,7 +437,7 @@ class CoreTestCase(unittest.TestCase):
                 sql_generator_model=generator_model,
                 analyst_model=analyst_model,
                 intent_model=FakeModel('{"intent": "query"}'),
-                databases=[register_database(SQLiteDatabase())],
+                databases=[fixture_registered_database()],
             )
         )
 
@@ -450,17 +451,17 @@ class CoreTestCase(unittest.TestCase):
     def test_select_requested_databases_returns_all_when_no_filter(self) -> None:
         """When no names requested, return all configured databases."""
 
-        db1 = register_database(SQLiteDatabase(), name="db1")
-        db2 = register_database(SQLiteDatabase(), name="db2")
+        db1 = fixture_registered_database(name="db1")
+        db2 = fixture_registered_database(name="db2")
         result = _select_requested_databases(None, [db1, db2])
         self.assertEqual(result, [db1, db2])
 
     def test_select_requested_databases_returns_filtered_list(self) -> None:
         """When names provided, return only matching databases."""
 
-        db1 = register_database(SQLiteDatabase(), name="db1")
-        db2 = register_database(SQLiteDatabase(), name="db2")
-        db3 = register_database(SQLiteDatabase(), name="db3")
+        db1 = fixture_registered_database(name="db1")
+        db2 = fixture_registered_database(name="db2")
+        db3 = fixture_registered_database(name="db3")
         result = _select_requested_databases(["db2", "db1"], [db1, db2, db3])
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0].name, "db2")
@@ -469,7 +470,7 @@ class CoreTestCase(unittest.TestCase):
     def test_select_requested_databases_raises_on_empty_list(self) -> None:
         """Empty requested names should raise DatabaseError."""
 
-        db1 = register_database(SQLiteDatabase(), name="db1")
+        db1 = fixture_registered_database(name="db1")
         with self.assertRaises(DatabaseError) as cm:
             _select_requested_databases([], [db1])
         self.assertIn("At least one database must be selected", str(cm.exception))
@@ -477,7 +478,7 @@ class CoreTestCase(unittest.TestCase):
     def test_select_requested_databases_raises_on_unknown_name(self) -> None:
         """Unknown database names should raise DatabaseError."""
 
-        db1 = register_database(SQLiteDatabase(), name="db1")
+        db1 = fixture_registered_database(name="db1")
         with self.assertRaises(DatabaseError) as cm:
             _select_requested_databases(["db1", "unknown"], [db1])
         self.assertIn("Unknown databases requested", str(cm.exception))
@@ -486,7 +487,7 @@ class CoreTestCase(unittest.TestCase):
     def test_select_requested_databases_raises_when_all_unknown(self) -> None:
         """When all requested names are unknown, raise error about unknown databases."""
 
-        db1 = register_database(SQLiteDatabase(), name="db1")
+        db1 = fixture_registered_database(name="db1")
         with self.assertRaises(DatabaseError) as cm:
             _select_requested_databases(["unknown1", "unknown2"], [db1])
         self.assertIn("Unknown databases requested", str(cm.exception))

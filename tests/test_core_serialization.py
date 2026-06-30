@@ -12,7 +12,8 @@ for parent in Path(__file__).resolve().parents:
         break
 
 from core import _select_requested_databases
-from tools.database import register_database, SQLiteDatabase, DatabaseError
+from tools.database import DatabaseError
+from tests.test_db.helpers import fixture_registered_database
 
 
 class CoreTestCase(unittest.TestCase):
@@ -25,15 +26,15 @@ class CoreTestCase(unittest.TestCase):
 
     def test_select_requested_databases_returns_none_when_no_request(self) -> None:
         """Should return configured databases when no request is made."""
-        configured = [register_database(SQLiteDatabase(), name="db1")]
+        configured = [fixture_registered_database(name="db1")]
         result = _select_requested_databases(None, configured)
         self.assertEqual(result, configured)
 
     def test_select_requested_databases_selects_requested(self) -> None:
         """Should filter to only requested databases."""
         configured = [
-            register_database(SQLiteDatabase(), name="db1"),
-            register_database(SQLiteDatabase(), name="db2"),
+            fixture_registered_database(name="db1"),
+            fixture_registered_database(name="db2"),
         ]
         result = _select_requested_databases(["db2"], configured)
         self.assertIsNotNone(result)
@@ -44,7 +45,7 @@ class CoreTestCase(unittest.TestCase):
 
     def test_select_requested_databases_raises_for_unknown(self) -> None:
         """Should raise DatabaseError for unknown database names."""
-        configured = [register_database(SQLiteDatabase(), name="db1")]
+        configured = [fixture_registered_database(name="db1")]
         
         with self.assertRaises(DatabaseError) as context:
             _select_requested_databases(["unknown"], configured)
@@ -53,7 +54,7 @@ class CoreTestCase(unittest.TestCase):
 
     def test_select_requested_databases_raises_for_empty(self) -> None:
         """Should raise DatabaseError when empty list is requested."""
-        configured = [register_database(SQLiteDatabase(), name="db1")]
+        configured = [fixture_registered_database(name="db1")]
         
         with self.assertRaises(DatabaseError) as context:
             _select_requested_databases([], configured)
@@ -62,7 +63,7 @@ class CoreTestCase(unittest.TestCase):
 
     def test_select_requested_databases_raises_when_no_databases_match(self) -> None:
         """Should raise DatabaseError when no requested databases match."""
-        configured = [register_database(SQLiteDatabase(), name="db1")]
+        configured = [fixture_registered_database(name="db1")]
         
         with self.assertRaises(DatabaseError) as context:
             _select_requested_databases(["db2", "db3"], configured)
