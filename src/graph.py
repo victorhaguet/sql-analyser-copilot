@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Iterator, Literal, Protocol, TypedDict, cast
+from uuid import uuid4
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -219,15 +220,21 @@ def stream_sql_agent_execution(
     Yields:
         SQLAgentTraceStep: Current state of the graph
     """
+    resolved_config = config or {"configurable": {"thread_id": uuid4().hex}}
+
     if isinstance(initial_state, dict):
         state = cast(SQLAgentState, initial_state)
-    elif config is not None:
-        snapshot = graph.get_state(config)
+    elif resolved_config is not None:
+        snapshot = graph.get_state(resolved_config)
         values = getattr(snapshot, "values", {})
         state = cast(SQLAgentState, values if isinstance(values, dict) else {})
     else:
         state = cast(SQLAgentState, {})
-    for event in graph.stream(initial_state, config=config, stream_mode=stream_mode):
+    for event in graph.stream(
+        initial_state,
+        config=resolved_config,
+        stream_mode=stream_mode,
+    ):
         node_name, update, state = _normalize_stream_event(event, state, stream_mode)
         yield {
             "node": node_name,
