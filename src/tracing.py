@@ -135,10 +135,47 @@ def build_trace_log_content(question: str, trace: list[SQLAgentTraceStep]) -> st
     return "\n".join(sections) + "\n"
 
 
+def extract_trace_steps_from_content(content: str) -> list[str]:
+    """Extract trace steps from existing log content.
+
+    Args:
+        content: The existing log content.
+
+    Returns:
+        List of trace step lines (excluding Human Message header and question).
+    """
+    lines = content.split("\n")
+    result = []
+    in_trace_section = False
+    skip_next = False
+    
+    for i, line in enumerate(lines):
+        if skip_next:
+            skip_next = False
+            continue
+            
+        if line.startswith("=") and "Human Message" in line:
+            # Skip the Human Message header
+            if i + 1 < len(lines):
+                # Also skip the question line
+                skip_next = True
+            in_trace_section = True
+            continue
+        
+        if in_trace_section:
+            if line.startswith("=") and "Human Message" in line:
+                # New Human Message - stop here (this is the start of appended content)
+                break
+            result.append(line)
+    
+    return result
+
+
 def write_trace_log(
     question: str,
     trace: list[SQLAgentTraceStep],
     trace_log_dir: str | Path | None,
+    existing_log_path: Path | str | dict | None = None,
 ) -> Path:
     """Persist one run trace under the configured log directory.
 
@@ -146,12 +183,65 @@ def write_trace_log(
         question: The original natural language question that was asked.
         trace: The list of SQLAgentTraceStep dictionaries representing the execution trace.
         trace_log_dir: The directory where the trace log should be saved.
+        existing_log_path: Optional existing log path to append to instead of creating a new file.
 
     Returns:
         The path to the saved trace log file.
     """
     log_dir = Path(trace_log_dir) if trace_log_dir is not None else TRACE_LOG_DIR
     log_dir.mkdir(parents=True, exist_ok=True)
+
+    normalized_existing_log_path: Path | None = None
+    if existing_log_path is not None:
+        if isinstance(existing_log_path, dict):
+            if "path" in existing_log_path:
+                normalized_existing_log_path = Path(existing_log_path["path"])
+            elif "trace_log_path" in existing_log_path:
+                normalized_existing_log_path = Path(existing_log_path["trace_log_path"])
+            else:
+                normalized_existing_log_path = Path(str(existing_log_path))
+        elif isinstance(existing_log_path, str):
+            normalized_existing_log_path = Path(existing_log_path)
+        else:
+            normalized_existing_log_path = existing_log_path
+
+    if normalized_existing_log_path is not None and normalized_existing_log_path.exists():
+        old_content = normalized_existing_log_path.read_text(encoding="utf-8")
+        old_trace_steps = extract_trace_steps_from_content(old_content)
+        
+        # Build new content but only keep the trace steps (skip human message)
+        new_full_content = build_trace_log_content(question, trace)
+        new_lines = new_full_content.split("\n")
+        
+        # Find where trace steps start in the new content
+        trace_start_idx = 0
+        for i, line in enumerate(new_lines):
+            if line.startswith("=") and "Human Message" in line:
+                trace_start_idx = i + 2  # Skip header and question
+                break
+        
+        # Skip the human message from new content, keep only trace steps
+        new_trace_steps = new_lines[trace_start_idx:]
+        
+        # Reconstruct content: old header + question + old steps + new steps
+        old_lines = old_content.split("\n")
+        # Find where to split old content (after question)
+        question_end_idx = 0
+        for i, line in enumerate(old_lines):
+            if line.startswith("=") and "Human Message" in line:
+                if i + 1 < len(old_lines):
+                    question_end_idx = i + 1  # Include the question line
+                break
+        
+        old_header_and_question = old_lines[:question_end_idx + 1]
+        
+        # Combine all parts
+        merged_lines = old_header_and_question + old_trace_steps + new_trace_steps
+        merged_content = "\n".join(merged_lines)
+        
+        normalized_existing_log_path.write_text(merged_content, encoding="utf-8")
+        return normalized_existing_log_path
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     log_path = log_dir / f"trace_{timestamp}_{uuid4().hex[:8]}.log"
     log_path.write_text(build_trace_log_content(question, trace), encoding="utf-8")

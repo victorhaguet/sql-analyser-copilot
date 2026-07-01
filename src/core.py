@@ -25,6 +25,7 @@ class PendingApprovalSession:
     graph: Any
     question: str
     user_sub: str
+    trace_log_path: Path | None = None
 
 
 def _select_requested_databases(
@@ -228,15 +229,27 @@ def _attach_trace_metadata(
     question: str,
     trace: list[SQLAgentTraceStep],
     trace_log_dir: str | Path | None,
-) -> SQLAgentState:
-    """Persist and attach the normalized execution trace metadata."""
+    existing_log_path: Path | str | dict | None = None,
+) -> tuple[SQLAgentState, Path]:
+    """Persist and attach the normalized execution trace metadata.
 
-    log_path = write_trace_log(question, trace, trace_log_dir)
+    Args:
+        state: The current SQL agent state.
+        question: The original natural language question.
+        trace: The execution trace steps.
+        trace_log_dir: Directory to save trace logs.
+        existing_log_path: Optional existing log path for merging.
+
+    Returns:
+        Tuple of (updated_state, log_path).
+    """
+
+    log_path = write_trace_log(question, trace, trace_log_dir, existing_log_path=existing_log_path)
     metadata = dict(state.get("metadata") or {})
     metadata["execution_trace"] = _serialize_trace(trace)
     metadata["trace_log_path"] = str(log_path)
     state["metadata"] = metadata
-    return state
+    return state, log_path
 
 
 def start_question(
@@ -298,13 +311,17 @@ def start_question(
                     graph=graph,
                     question=question,
                     user_sub=user_sub,
+                    trace_log_path=None,
                 )
-        return _attach_trace_metadata(
+        result_state, log_path = _attach_trace_metadata(
             result_state,
             question=question,
             trace=trace,
             trace_log_dir=trace_log_dir,
         )
+        if interrupt_payload is not None and pending_approval_sessions is not None:
+            pending_approval_sessions[thread_id].trace_log_path = log_path
+        return result_state
 
     result = graph.invoke(initial_state, config=config)
     interrupt_payload = _extract_interrupt_payload(result)
@@ -336,7 +353,23 @@ def resume_question(
     trace_log_dir: str | Path | None = None,
     user_sub: str = "",
 ) -> SQLAgentState:
-    """Resume an approval-gated SQL modification run."""
+    """Resume an approval-gated SQL modification run.
+
+    Args:
+        thread_id (str): Memory ID of the graph
+        decision (str): Decision of the user (approve or reject)
+        pending_approval_sessions (dict[str, PendingApprovalSession]): Pending session
+        include_trace (bool, optional): When true, attach a normalized per-step execution trace to `metadata["execution_trace"]`. Defaults to False.
+        trace_log_dir (str | Path | None, optional): directory path where to save the log files. Defaults to None.
+        user_sub (str, optional): ID of the authentificated user. Defaults to "".
+
+    Raises:
+        ValueError: No pending session found
+        ValueError: If the user ID is different from the user ID of the session
+
+    Returns:
+        SQLAgentState: State of the agent after the modification of the database
+    """
 
     session = pending_approval_sessions.get(thread_id)
     if session is None:
@@ -371,12 +404,14 @@ def resume_question(
             pending_approval_sessions.pop(thread_id, None)
             result_state.pop("thread_id", None)
             result_state.pop("interrupt", None)
-        return _attach_trace_metadata(
+        result_state, _ = _attach_trace_metadata(
             result_state,
             question=session.question,
             trace=trace,
             trace_log_dir=trace_log_dir,
+            existing_log_path=session.trace_log_path,
         )
+        return result_state
 
     result = session.graph.invoke(Command(resume=decision), config=config)
     interrupt_payload = _extract_interrupt_payload(result)
