@@ -5,14 +5,14 @@ from __future__ import annotations
 import unittest
 
 from nodes.result_analyst import ResultAnalystNode
-from tools.database import SQLiteDatabase
+from tests.test_db.helpers import fixture_database
 
 
 class ResultAnalystNodeTestCase(unittest.TestCase):
     """Test result analysis behavior."""
 
     def test_has_non_llm_fallback(self) -> None:
-        database = SQLiteDatabase()
+        database = fixture_database()
         query_result = database.execute_command(
             "SELECT Name FROM Artist ORDER BY ArtistId LIMIT 1"
         )

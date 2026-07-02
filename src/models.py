@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,6 +16,13 @@ class QueryRequest(BaseModel):
     question: str = Field(min_length=1)
     execution_limit: int = Field(default=200, gt=0)
     selected_databases: list[str] | None = None
+
+
+class QueryResumeRequest(BaseModel):
+    """Incoming payload for resuming approval-gated SQL modifications."""
+
+    thread_id: str = Field(min_length=1)
+    decision: Literal["approve", "reject"]
 
 
 class LoginRequest(BaseModel):
@@ -68,12 +75,20 @@ class QueryResponse(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     question: str
+    intent: str | None = None
+    intent_error: str | None = None
     schema_overview: str | None = None
     selected_database: str | None = None
     generated_sql: str | None = None
     validated_sql: str | None = None
     sql_validation_error: str | None = None
+    authorization_error: str | None = None
+    is_authorized: bool | None = None
     query_result: QueryResultPayload | None = None
     execution_error: str | None = None
+    execution_requested: bool = False
+    execution_confirmed: bool = False
+    thread_id: str | None = None
+    interrupt: dict[str, Any] | None = None
     analysis: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

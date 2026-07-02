@@ -6,13 +6,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-from utils.nodes import load_prompt, render_prompt
-from nodes.sql_generator import LLM
+from utils.nodes import LLM, load_prompt, render_prompt
 from utils.llm import extract_text_from_response
 from state import SQLAgentState
 from tools.database import QueryResult
 
-PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "result_analyst.j2"
+PROMPT_PATH_QUERY = Path(__file__).resolve().parents[1] / "prompts" / "result_analyst_query.j2"
+PROMPT_PATH_MODIFICATION = Path(__file__).resolve().parents[1] / "prompts" / "result_analyst_modification.j2"
+PROMPT_DEFAULT = """
+You explain SQL query results to a business user.\n
+Question:\n{{ question }}\n\n
+SQL:\n{{ sql }}\n\n
+Result:\n{{ result_payload }}\n
+"""
 
 
 def _serialize_result(result: QueryResult) -> str:
@@ -43,14 +49,14 @@ class ResultAnalystNode:
     ) -> None:
         """Initialize the ResultAnalystNode."""
         self.model = model
-        self.prompt_template = prompt_template or load_prompt(
-            PROMPT_PATH,
-            (
-                "You explain SQL query results to a business user.\n"
-                "Question:\n{{ question }}\n\n"
-                "SQL:\n{{ sql }}\n\n"
-                "Result:\n{{ result_payload }}\n"
-            ),
+        self.prompt_template_query = prompt_template or load_prompt(
+            PROMPT_PATH_QUERY,
+            PROMPT_DEFAULT,
+
+        )
+        self.prompt_template_modification = prompt_template or load_prompt(
+            PROMPT_PATH_MODIFICATION,
+            PROMPT_DEFAULT,
         )
 
     def __call__(self, state: SQLAgentState) -> dict[str, Any]:
@@ -73,11 +79,20 @@ class ResultAnalystNode:
             if result.rows:
                 summary += f" First row: {result.rows[0]}."
             return {"analysis": summary}
+        
+        if state["intent"] == "query":
+            prompt = render_prompt(
+                self.prompt_template_query,
+                question=state["question"],
+                sql=state["validated_sql"],
+                result_payload=_serialize_result(result),
+            )
+            return {"analysis": extract_text_from_response(self.model.invoke(prompt))}
 
         prompt = render_prompt(
-            self.prompt_template,
+            self.prompt_template_modification,
             question=state["question"],
-            sql=state["validated_sql"],
-            result_payload=_serialize_result(result),
+            sql=state["generated_sql"],
         )
         return {"analysis": extract_text_from_response(self.model.invoke(prompt))}
+        

@@ -82,6 +82,63 @@ def call_api(
         error_state["error_message"] = f"HTTP {response.status_code}"
         return error_state
 
+    result_state = build_display_context(response_data)
+    
+    return result_state
+
+
+def call_confirmation_api(
+    thread_id: str,
+    decision: str,
+    api_base_url: str,
+) -> dict[str, object]:
+    """Resume a pending SQL modification after approval or rejection.
+
+    Args:
+        thread_id (str): memory identifier for the graph
+        decision (str): Decision of the user
+        api_base_url (str): Base URL of the fastAPI application
+
+    Returns:
+        dict[str, object]: A directory with values formatted to display the UI
+    """
+
+    user = st.session_state.get("user", {})
+    headers = {
+        "X-User-Sub": user.get("sub", ""),
+        "X-User-Role": user.get("role", ""),
+    }
+
+    try:
+        response = httpx.post(
+            f"{api_base_url.rstrip('/')}/query/confirm",
+            json={
+                "thread_id": thread_id,
+                "decision": decision,
+            },
+            headers=headers,
+            timeout=120.0,
+        )
+    except httpx.HTTPError as exc:
+        error_state = build_empty_result_state()
+        error_state["ai_answer"] = f"FastAPI request failed: {exc}"
+        error_state["has_error"] = True
+        error_state["error_message"] = "API request failed"
+        return error_state
+
+    try:
+        response_data = response.json()
+    except ValueError:
+        response_data = {}
+
+    if response.is_error:
+        detail = response_data.get("detail") or "The API request failed."
+        error_state = build_empty_result_state()
+        error_state["ai_answer"] = str(detail)
+        error_state["has_error"] = True
+        error_state["error_message"] = f"HTTP {response.status_code}"
+        return error_state
+
     return build_display_context(response_data)
 
 
@@ -90,6 +147,7 @@ def _initialize_state() -> None:
     st.session_state.setdefault("question_input", DEFAULT_QUESTION)
     st.session_state.setdefault("result_state", build_empty_result_state())
     st.session_state.setdefault("selected_databases", [])
+    st.session_state.setdefault("approval_dialog_open", False)
 
 
 def _sync_selected_databases(databases: list[RegisteredDatabase]) -> list[str]:
@@ -192,11 +250,11 @@ def _render_database_catalog() -> list[str]:
         return st.session_state["selected_databases"]
 
 
-def _render_question_panel() -> tuple[str, int, bool]:
+def _render_question_panel() ->bool:
     """Render question panel
 
     Returns:
-        tuple[str, int, bool]: List of input for the agent
+        bool: return if the question was submitted or not
     """
     with st.form("sql-copilot-form"):
         question = st.text_area(
@@ -221,7 +279,7 @@ def _render_question_panel() -> tuple[str, int, bool]:
             submitted = st.form_submit_button("Run analysis", use_container_width=True)
 
     st.session_state["execution_limit"] = execution_limit
-    return question, execution_limit, submitted
+    return submitted
 
 
 def _render_result_summary(result_state: dict[str, object]) -> None:
@@ -275,12 +333,16 @@ def _render_results(result_state: dict[str, object]) -> None:
         result_state (dict[str, object]): _description_
     """
     _render_result_summary(result_state)
-
+    rejected_modification: bool = (
+        not result_state.get("execution_confirmed") and not result_state.get("execution_requested") and result_state.get("intent") == "modification"
+    )
     answer_tab, sql_tab, data_tab = st.tabs(["Answer", "SQL", "Result Preview"])
 
     with answer_tab:
         if result_state.get("has_error"):
             st.error(str(result_state.get("ai_answer") or "The request failed."))
+        elif rejected_modification:
+            st.warning("The SQL modification was rejected. Check the SQL tab to see the draft query.")
         else:
             st.write(str(result_state.get("ai_answer") or ""))
 
@@ -298,6 +360,55 @@ def _render_results(result_state: dict[str, object]) -> None:
             st.info("No result rows were returned for this run.")
 
 
+@st.dialog("Confirm SQL modification")
+def _render_approval_dialog(
+    result_state: dict[str, object],
+    api_base_url: str,
+) -> None:
+    """Render the approval popup for modification queries."""
+
+    interrupt_payload = result_state.get("interrupt")
+    prompt_payload = interrupt_payload if isinstance(interrupt_payload, dict) else {}
+    message = str(
+        prompt_payload.get("question")
+        or "Please review the SQL statement before continuing."
+    )
+    sql_draft = str(prompt_payload.get("draft") or result_state.get("sql_query") or "")
+
+    st.write(message)
+    if prompt_payload.get("request"):
+        st.caption(f"Request: {prompt_payload['request']}")
+    st.code(sql_draft or "-- SQL will appear here", language="sql")
+
+    approve_col, reject_col = st.columns([4.5 ,1.5])
+    with approve_col:
+        if st.button("Approve", use_container_width=True, key="approve_sql_modification"):
+            with st.spinner("Executing approved SQL..."):
+                updated_state = call_confirmation_api(
+                    str(result_state.get("thread_id") or ""),
+                    "approve",
+                    api_base_url,
+                )
+            st.session_state["result_state"] = updated_state
+            st.session_state["approval_dialog_open"] = False
+            st.rerun()
+    with reject_col:
+        if st.button(
+            "Reject", 
+            key="reject_sql_modification",
+            width="stretch"
+        ):
+            with st.spinner("Rejecting SQL..."):
+                updated_state = call_confirmation_api(
+                    str(result_state.get("thread_id") or ""),
+                    "reject",
+                    api_base_url,
+                )
+            st.session_state["result_state"] = updated_state
+            st.session_state["approval_dialog_open"] = False
+            st.rerun()
+
+
 def render_sql_copilot_page() -> None:
     """Render the SQL Copilot page or the login form when logged out."""
     if not is_authenticated_page():
@@ -310,18 +421,44 @@ def render_sql_copilot_page() -> None:
 
     _render_header()
     selected_databases = _render_database_catalog()
-    question, execution_limit, submitted = _render_question_panel()
+    submitted = _render_question_panel()
+
+    question = st.session_state.get("question_input", "")
+    execution_limit = st.session_state.get("execution_limit", 200)
+    result_state = st.session_state["result_state"]
 
     if submitted:
         with st.spinner("Running query pipeline..."):
-            st.session_state["result_state"] = call_api(
+            result_state = call_api(
                 question=question,
                 execution_limit=execution_limit,
                 api_base_url=api_base_url,
                 selected_databases=selected_databases,
             )
+            st.session_state["result_state"] = result_state
+            st.session_state["approval_dialog_open"] = bool(
+                result_state.get("execution_requested")
+                and not result_state.get("execution_confirmed")
+            )
+            result_state = st.session_state["result_state"]
 
-    result_state = st.session_state["result_state"]
+    if result_state.get("authorization_error"):
+        st.error(str(result_state.get("authorization_error")))
+        return
+
+    pending_approval = bool(
+        result_state.get("execution_requested")
+        and not result_state.get("execution_confirmed")
+    )
+
+    if pending_approval:
+        st.warning("This SQL modification is waiting for your approval.")
+        if st.button("Review SQL command", key="review_sql_command_btn"):
+            st.session_state["approval_dialog_open"] = True
+
+    if pending_approval and st.session_state.get("approval_dialog_open"):
+        _render_approval_dialog(result_state, api_base_url)
+
     has_result_content = any(
         [
             result_state.get("question"),
@@ -329,6 +466,6 @@ def render_sql_copilot_page() -> None:
             result_state.get("ai_answer"),
         ]
     )
-    if has_result_content:
+    if has_result_content and not pending_approval:
         with st.container(border=True, key="result"):
             _render_results(result_state)

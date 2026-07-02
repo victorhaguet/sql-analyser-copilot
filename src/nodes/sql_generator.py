@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
-from utils.nodes import load_prompt, render_prompt
+from utils.nodes import LLM, load_prompt, render_prompt
+from utils.llm import extract_text_from_response, strip_code_fences
 from state import SQLAgentState
 from tools.database import (
     SQLiteDatabase,
@@ -13,25 +14,9 @@ from tools.database import (
     get_default_database,
     RegisteredDatabase
 )
-from utils.llm import extract_text_from_response, strip_code_fences
 from nodes import get_database
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "sql_generator.j2"
-
-
-class LLM(Protocol):
-    """Minimal protocol for language models used across all nodes."""
-
-    def invoke(self, prompt: str) -> Any:
-        """
-        Return model output for the given prompt.
-        
-        Args:
-            prompt: The input prompt string to generate a response for. 
-
-        Returns:
-            The raw output from the model
-        """
 
 
 class SQLGeneratorNode:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from jinja2 import Environment, StrictUndefined
 
@@ -40,3 +40,18 @@ def render_prompt(template: str, **context: Any) -> str:
         str: rendered prompt
     """    
     return PROMPT_ENVIRONMENT.from_string(template).render(**context).strip()
+
+
+class LLM(Protocol):
+    """Minimal protocol for language models used across all nodes."""
+
+    def invoke(self, prompt: str) -> Any:
+        """
+        Return model output for the given prompt.
+        
+        Args:
+            prompt: The input prompt string to generate a response for. 
+
+        Returns:
+            The raw output from the model
+        """

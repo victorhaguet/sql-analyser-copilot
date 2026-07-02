@@ -52,23 +52,23 @@ class ConfigTestCase(unittest.TestCase):
                 sys.modules[name] = module
 
     def test_load_models_from_env_returns_none_when_no_api_key(self) -> None:
-        """Should return (None, None) when OPENAI_API_KEY is not set."""        
+        """Should return (None, None, None) when OPENAI_API_KEY is not set."""        
         os.environ.pop("OPENAI_API_KEY", None)
         os.environ.pop("SQL_COPILOT_MODEL", None)
         
         result = config.load_models_from_env()
-        self.assertEqual(result, (None, None))
+        self.assertEqual(result, (None, None, None))
 
     def test_load_models_from_env_returns_none_when_no_model_name(self) -> None:
-        """Should return (None, None) when SQL_COPILOT_MODEL is not set."""     
+        """Should return (None, None, None) when SQL_COPILOT_MODEL is not set."""     
         os.environ["OPENAI_API_KEY"] = "test-key"
         os.environ.pop("SQL_COPILOT_MODEL", None)
         
         result = config.load_models_from_env()
-        self.assertEqual(result, (None, None))
+        self.assertEqual(result, (None, None, None))
 
     def test_load_models_from_env_creates_models_from_env(self) -> None:
-        """Should create generator and analyst models from environment variables."""
+        """Should create generator, analyst, and intent models from environment variables."""
         os.environ["OPENAI_API_KEY"] = "test-key"
         os.environ["SQL_COPILOT_MODEL"] = "gpt-4"
         os.environ["SQL_COPILOT_ANALYST_MODEL"] = "gpt-4-analyst"
@@ -76,10 +76,13 @@ class ConfigTestCase(unittest.TestCase):
         result = config.load_models_from_env()
         self.assertIsNotNone(result[0])
         self.assertIsNotNone(result[1])
+        self.assertIsNotNone(result[2])
         assert result[0] is not None
         assert result[1] is not None
+        assert result[2] is not None
         self.assertEqual(result[0].model, "gpt-4")
         self.assertEqual(result[1].model, "gpt-4-analyst")
+        self.assertEqual(result[2].model, "gpt-4")
 
     def test_load_models_from_env_uses_different_analyst_model(self) -> None:
         """Should use SQL_COPILOT_ANALYST_MODEL for analyst when set."""
@@ -90,10 +93,13 @@ class ConfigTestCase(unittest.TestCase):
         result = config.load_models_from_env()
         self.assertIsNotNone(result[0])
         self.assertIsNotNone(result[1])
+        self.assertIsNotNone(result[2])
         assert result[0] is not None
         assert result[1] is not None
+        assert result[2] is not None
         self.assertEqual(result[0].model, "gpt-4")
         self.assertEqual(result[1].model, "gpt-4-analyst")
+        self.assertEqual(result[2].model, "gpt-4")
 
     def test_load_models_from_env_includes_base_url(self) -> None:
         """Should pass OPENAI_BASE_URL to model constructors when set."""
@@ -105,10 +111,13 @@ class ConfigTestCase(unittest.TestCase):
         result = config.load_models_from_env()
         self.assertIsNotNone(result[0])
         self.assertIsNotNone(result[1])
+        self.assertIsNotNone(result[2])
         assert result[0] is not None
         assert result[1] is not None
+        assert result[2] is not None
         self.assertEqual(result[0].model, "gpt-4")
         self.assertEqual(result[1].model, "gpt-4")
+        self.assertEqual(result[2].model, "gpt-4")
 
     def test_load_trace_config_defaults(self) -> None:
         """Should return default values when environment variables are not set."""

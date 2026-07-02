@@ -6,8 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from utils.nodes import load_prompt, render_prompt
-from nodes.sql_generator import LLM
+from utils.nodes import LLM, load_prompt, render_prompt
 from utils.llm import extract_text_from_response, strip_code_fences
 from state import SQLAgentState
 from tools.database import RegisteredDatabase, format_database_schema

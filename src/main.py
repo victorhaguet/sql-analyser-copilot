@@ -10,10 +10,10 @@ from config import create_app_from_env
 from models import (
     LoginRequest,
     QueryRequest,
+    QueryResumeRequest,
     UserCreate,
     UserUpdate,
     HTTP_400_BAD_REQUEST,
-    HTTP_503_SERVICE_UNAVAILABLE
 )
 from app_auth import (
     get_user_by_username,
@@ -25,7 +25,7 @@ from app_auth import (
     update_user,
     delete_user,
 )
-from core import _select_requested_databases, _serialize_state, answer_question
+from core import _select_requested_databases, _serialize_state, resume_question, start_question
 
 app = create_app_from_env()
 
@@ -231,12 +231,13 @@ def delete_user_endpoint(sub: str, x_user_role: str = Header(...)) -> dict[str, 
 
 
 @app.post("/query")
-def query(payload: QueryRequest, x_user_sub: str = Header(...)) -> dict[str, Any]:
+def query(payload: QueryRequest, x_user_sub: str = Header(...), x_user_role: str = Header(...)) -> dict[str, Any]:
     """Query the graph
 
     Args:
         payload (QueryRequest): Input of the graph (question)
         x_user_sub (str, optional): ID of the authentificated user. Defaults to Header(...).
+        x_user_role (str, optional): Role of the authentificated user. Defaults to Header(...).
 
     Raises:
         HTTPException: Raise an error if the authentificated user can't be find in the user database
@@ -247,36 +248,27 @@ def query(payload: QueryRequest, x_user_sub: str = Header(...)) -> dict[str, Any
     Returns:
         dict[str, Any]: State of the graph after running it
     """
-    user = get_user_by_sub(x_user_sub)
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    if not user["is_active"]:
-        raise HTTPException(status_code=403, detail="Account is disabled")
-
-    if app.state.sql_generator_model is None:
-        raise HTTPException(
-            status_code=HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "No SQL generator model is configured. "
-                "Instantiate the app with a model before serving requests."
-            ),
-        )
+    get_user_by_sub(x_user_sub)
 
     try:
         databases = _select_requested_databases(
             payload.selected_databases,
             app.state.databases,
         )
-        result = answer_question(
+        result = start_question(
             question=payload.question,
             sql_generator_model=app.state.sql_generator_model,
             analyst_model=app.state.analyst_model,
             selector_model=app.state.selector_model,
+            intent_model=app.state.intent_model,
             databases=databases,
             validator=app.state.validator,
             execution_limit=payload.execution_limit,
             include_trace=app.state.enable_trace,
             trace_log_dir=app.state.trace_log_dir,
+            user_role=x_user_role,
+            user_sub=x_user_sub,
+            pending_approval_sessions=app.state.pending_approval_sessions,
         )
     except DatabaseError as exc:
         raise HTTPException(
@@ -285,6 +277,33 @@ def query(payload: QueryRequest, x_user_sub: str = Header(...)) -> dict[str, Any
         ) from exc
 
     return _serialize_state(result, question=payload.question)
+
+
+@app.post("/query/confirm")
+def confirm_query(
+    payload: QueryResumeRequest,
+    x_user_sub: str = Header(...),
+) -> dict[str, Any]:
+    """Resume a modification query after the user approves or rejects it."""
+
+    get_user_by_sub(x_user_sub)
+
+    try:
+        result = resume_question(
+            payload.thread_id,
+            payload.decision,
+            pending_approval_sessions=app.state.pending_approval_sessions,
+            include_trace=app.state.enable_trace,
+            trace_log_dir=app.state.trace_log_dir,
+            user_sub=x_user_sub,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return _serialize_state(result, question=result.get("question", ""))
 
 
 if __name__ == "__main__":

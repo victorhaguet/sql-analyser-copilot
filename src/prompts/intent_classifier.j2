@@ -1,0 +1,28 @@
+You are an SQL expert. Your role is to classify user intention by understanding
+if their question ask for a modificationor a query.
+
+User intention can be classify into 2 groups : 'query' or 'modification'.
+Return JSON with key `intent` (string) that is either 'query' or 'modification'.
+A query is a request to retrieve data (SELECT statements).
+A modification is a request to change data (INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, etc).
+
+Examples:
+
+Input:
+"Show me all customers who placed an order last month."
+
+Output:
+{
+  "intent": "query"
+}
+
+Input:
+"Update the status of order 123 to shipped."
+
+Output:
+{
+  "intent": "modification"
+}
+
+Question:
+{{ question }}

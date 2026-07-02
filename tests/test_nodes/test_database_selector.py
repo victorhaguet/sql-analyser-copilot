@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from nodes.database_selector import DatabaseSelectorNode
-from tools.database import SQLiteDatabase, register_database
+from tests.test_db.helpers import fixture_registered_database
 
 
 class FakeResponse:
@@ -27,7 +27,7 @@ class DatabaseSelectorNodeTestCase(unittest.TestCase):
 
     def test_single_database_selected_without_model(self) -> None:
         node = DatabaseSelectorNode(
-            [register_database(SQLiteDatabase(), name="chinook", description="Music data")]
+            [fixture_registered_database(name="chinook", description="Music data")]
         )
         result = node({"question": "Show the first artist"})
 
@@ -38,8 +38,8 @@ class DatabaseSelectorNodeTestCase(unittest.TestCase):
     def test_returns_error_when_no_database_matches(self) -> None:
         node = DatabaseSelectorNode(
             [
-                register_database(SQLiteDatabase(), name="music", description="Music store data"),
-                register_database(SQLiteDatabase(), name="billing", description="Invoice data"),
+                fixture_registered_database(name="music", description="Music store data"),
+                fixture_registered_database(name="billing", description="Invoice data"),
             ],
             model=FakeModel(
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "No database fits this weather question."}'
@@ -53,8 +53,8 @@ class DatabaseSelectorNodeTestCase(unittest.TestCase):
     def test_returns_ambiguity_error_when_multiple_databases_match(self) -> None:
         node = DatabaseSelectorNode(
             [
-                register_database(SQLiteDatabase(), name="music", description="Music store data"),
-                register_database(SQLiteDatabase(), name="billing", description="Invoice data"),
+                fixture_registered_database(name="music", description="Music store data"),
+                fixture_registered_database(name="billing", description="Invoice data"),
             ],
             model=FakeModel(
                 '{"match": false, "database": "", "candidate_databases": ["music", "billing"], "reason": "The question could be answered from either catalog."}'
@@ -68,7 +68,7 @@ class DatabaseSelectorNodeTestCase(unittest.TestCase):
 
     def test_single_database_can_reject_irrelevant_question(self) -> None:
         node = DatabaseSelectorNode(
-            [register_database(SQLiteDatabase(), name="music", description="Music store data")],
+            [fixture_registered_database(name="music", description="Music store data")],
             model=FakeModel(
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "This question is unrelated to the catalog."}'
             ),
@@ -79,7 +79,7 @@ class DatabaseSelectorNodeTestCase(unittest.TestCase):
 
     def test_handles_json_code_block_format(self) -> None:
         node = DatabaseSelectorNode(
-            [register_database(SQLiteDatabase(), name="music", description="Music data")],
+            [fixture_registered_database(name="music", description="Music data")],
             model=FakeModel(
                 '```json\n{"match": true, "database": "music", "candidate_databases": ["music"], "reason": "Match found"}\n```'
             ),
@@ -90,7 +90,7 @@ class DatabaseSelectorNodeTestCase(unittest.TestCase):
 
     def test_handles_json_with_leading_label(self) -> None:
         node = DatabaseSelectorNode(
-            [register_database(SQLiteDatabase(), name="music", description="Music data")],
+            [fixture_registered_database(name="music", description="Music data")],
             model=FakeModel(
                 '```json\n{"match": true, "database": "music", "candidate_databases": ["music"], "reason": "Match"}\n```'
             ),
@@ -101,7 +101,7 @@ class DatabaseSelectorNodeTestCase(unittest.TestCase):
 
     def test_returns_error_for_invalid_json(self) -> None:
         node = DatabaseSelectorNode(
-            [register_database(SQLiteDatabase(), name="music", description="Music data")],
+            [fixture_registered_database(name="music", description="Music data")],
             model=FakeModel("this is not valid json"),
         )
         result = node({"question": "Show artists"})

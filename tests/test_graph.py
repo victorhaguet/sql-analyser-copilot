@@ -6,18 +6,25 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from uuid import uuid4
 
 for parent in Path(__file__).resolve().parents:
     if (parent / "src").exists():
         sys.path.insert(0, str(parent / "src"))
         break
 
-from tools.database import SQLiteDatabase, register_database
-from graph import _normalize_stream_event
+from langgraph.types import Interrupt
+from graph import INTERRUPT_EVENT, _normalize_stream_event
 from state import SQLAgentState
 from graph import _summarize_step_outcome
+from tests.test_db.helpers import fixture_registered_database
 
 SQLAgentStateUpdate = SQLAgentState
+
+
+def build_thread_config() -> dict[str, dict[str, str]]:
+    """Create a LangGraph config with a unique thread id for tests."""
+    return {"configurable": {"thread_id": uuid4().hex}}
 
 
 class TestNormalizeStreamEvent(unittest.TestCase):
@@ -104,6 +111,25 @@ class TestNormalizeStreamEvent(unittest.TestCase):
         with self.assertRaises(TypeError):
             _normalize_stream_event(event, current_state, "updates")
 
+    def test_normalize_stream_event_handles_interrupt_event(self) -> None:
+        """Interrupt events should be normalized into approval state."""
+        event = {INTERRUPT_EVENT: [Interrupt({"draft": "DELETE FROM Artist"})]}
+        node_name, update, state = _normalize_stream_event(event, {}, "updates")
+        self.assertEqual(node_name, INTERRUPT_EVENT)
+        self.assertEqual(update["interrupt"], {"draft": "DELETE FROM Artist"})
+        self.assertTrue(update["execution_requested"])
+        self.assertEqual(state["interrupt"], {"draft": "DELETE FROM Artist"})
+
+    def test_normalize_stream_event_rejects_empty_interrupt_list(self) -> None:
+        """Interrupt events without payloads should fail fast."""
+        with self.assertRaises(TypeError):
+            _normalize_stream_event({INTERRUPT_EVENT: []}, {}, "updates")
+
+    def test_normalize_stream_event_rejects_non_interrupt_payload(self) -> None:
+        """Interrupt events should require a LangGraph Interrupt object."""
+        with self.assertRaises(TypeError):
+            _normalize_stream_event({INTERRUPT_EVENT: ["invalid"]}, {}, "updates")
+
 
 class TestSummarizeStepOutcome(unittest.TestCase):
     """Test the _summarize_step_outcome function."""
@@ -158,6 +184,16 @@ class TestSummarizeStepOutcome(unittest.TestCase):
         """Test summarization for default case."""
         result = _summarize_step_outcome({"metadata": {}})
         self.assertEqual(result, "updated")
+
+    def test_summarize_authorization_failed(self) -> None:
+        """Authorization errors should use the dedicated outcome label."""
+        result = _summarize_step_outcome({"authorization_error": "denied"})
+        self.assertEqual(result, "authorization_failed")
+
+    def test_summarize_execution_pending_approval(self) -> None:
+        """Interrupt state should be summarized as pending approval."""
+        result = _summarize_step_outcome({"interrupt": {"draft": "DELETE"}})
+        self.assertEqual(result, "execution_pending_approval")
 
 
 class FakeResponseTestCase(unittest.TestCase):
@@ -397,9 +433,10 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel("DELETE FROM Artist"),
-            databases=[register_database(SQLiteDatabase())],
+            intent_model=FakeModel('{"intent": "query"}'),
+            databases=[fixture_registered_database()],
         )
-        result = graph.invoke({"question": "Delete artists"})
+        result = graph.invoke({"question": "Delete artists"}, config=build_thread_config())
         self.assertIn("sql_validation_error", result)
         self.assertNotIn("query_result", result)
 
@@ -410,9 +447,13 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel("SELECT * FROM Artist"),
-            databases=[register_database(SQLiteDatabase())],
+            intent_model=FakeModel('{"intent": "query"}'),
+            databases=[fixture_registered_database()],
         )
-        result = graph.invoke({"question": "Select from Artist"})
+        result = graph.invoke(
+            {"question": "Select from Artist"},
+            config=build_thread_config(),
+        )
         self.assertIn("query_result", result)
         self.assertIsNone(result.get("execution_error"))
         self.assertIsNotNone(result["query_result"])
@@ -427,11 +468,14 @@ class SQLGraphTestCase(unittest.TestCase):
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
             ),
             databases=[
-                register_database(SQLiteDatabase(), name="music", description="Music data"),
-                register_database(SQLiteDatabase(), name="sales", description="Sales data"),
+                fixture_registered_database(name="music", description="Music data"),
+                fixture_registered_database(name="sales", description="Sales data"),
             ],
         )
-        result = graph.invoke({"question": "What is the weather in Berlin?"})
+        result = graph.invoke(
+            {"question": "What is the weather in Berlin?"},
+            config=build_thread_config(),
+        )
         self.assertIn("execution_error", result)
         self.assertNotIn("generated_sql", result)
 
@@ -445,11 +489,14 @@ class SQLGraphTestCase(unittest.TestCase):
                 '{"match": false, "database": "", "candidate_databases": ["music", "sales"], "reason": "The question could be answered from either catalog."}'
             ),
             databases=[
-                register_database(SQLiteDatabase(), name="music", description="Music data"),
-                register_database(SQLiteDatabase(), name="sales", description="Sales data"),
+                fixture_registered_database(name="music", description="Music data"),
+                fixture_registered_database(name="sales", description="Sales data"),
             ],
         )
-        result = graph.invoke({"question": "Show me recent invoice activity."})
+        result = graph.invoke(
+            {"question": "Show me recent invoice activity."},
+            config=build_thread_config(),
+        )
         self.assertTrue(result["metadata"]["database_selection_ambiguous"])
         self.assertNotIn("generated_sql", result)
 
@@ -458,20 +505,64 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph, stream_sql_agent_execution
 
         graph = build_sql_agent_graph(
-            FakeModel("SELECT Name FROM Artist WHERE ArtistId = 1"),
-            databases=[register_database(SQLiteDatabase())],
+            FakeModel('SELECT Name FROM Artist WHERE ArtistId = 1'),
+            intent_model=FakeModel('{"intent": "query"}'),
+            databases=[fixture_registered_database()],
         )
 
         steps = list(stream_sql_agent_execution(graph, {"question": "Who is artist 1?"}))
 
         self.assertEqual(
             [step["node"] for step in steps],
-            ["database_selector", "sql_generator", "sql_validator", "sql_executor", "result_analyst"],
+            ["database_selector", "intent_classifier", "sql_generator", "sql_validator", "sql_executor", "result_analyst"],
         )
         self.assertEqual(steps[0]["outcome"], "database_selected")
-        self.assertEqual(steps[1]["outcome"], "sql_generated")
+        self.assertEqual(steps[1]["outcome"], "Intention classified")
+        self.assertEqual(steps[2]["outcome"], "sql_generated")
         self.assertEqual(steps[-1]["outcome"], "analysis_ready")
         self.assertEqual(steps[-1]["state"]["analysis"][:8], "Returned")
+
+    def test_build_graph_stops_when_intent_is_modification(self) -> None:
+        """Questions that intent to modify should abort before SQL generation."""
+        from graph import build_sql_agent_graph
+
+        graph = build_sql_agent_graph(
+            FakeModel('{"intent": "modification"}'),
+            databases=[fixture_registered_database()],
+        )
+        result = graph.invoke(
+            {"question": "Delete all artists"},
+            config=build_thread_config(),
+        )
+        self.assertIn("authorization_error", result)
+        self.assertEqual(result["intent"], "modification")
+        self.assertNotIn("generated_sql", result)
+
+    def test_stream_sql_agent_execution_with_intent_classifier(self) -> None:
+        """Streaming should expose intent_classifier after database_selector."""
+        from graph import build_sql_agent_graph, stream_sql_agent_execution
+
+        graph = build_sql_agent_graph(
+            FakeModel('SELECT Name FROM Artist WHERE ArtistId = 1'),
+            intent_model=FakeModel('{"intent": "query"}'),
+            databases=[fixture_registered_database()],
+        )
+
+        steps = list(stream_sql_agent_execution(graph, {"question": "Who is artist 1?"}))
+
+        self.assertEqual(
+            [step["node"] for step in steps],
+            [
+                "database_selector",
+                "intent_classifier",
+                "sql_generator",
+                "sql_validator",
+                "sql_executor",
+                "result_analyst",
+            ],
+        )
+        self.assertEqual(steps[0]["outcome"], "database_selected")
+        self.assertEqual(steps[1]["outcome"], "Intention classified")
 
     def test_stream_sql_agent_execution_with_values_mode(self) -> None:
         """Test streaming with values mode instead of updates mode."""
@@ -480,7 +571,7 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel("SELECT Name FROM Artist WHERE ArtistId = 1"),
-            databases=[register_database(SQLiteDatabase())],
+            databases=[fixture_registered_database()],
         )
 
         steps = list(

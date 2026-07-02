@@ -1,0 +1,37 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	database_selector(database_selector)
+	intent_classifier(intent_classifier)
+	role_authorizer(role_authorizer)
+	sql_generator(sql_generator)
+	sql_validator(sql_validator)
+	modification_validator(modification_validator::interrupt)
+	sql_executor(sql_executor)
+	result_analyst(result_analyst)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> database_selector;
+	database_selector -. &nbsp;abort&nbsp; .-> __end__;
+	database_selector -.-> intent_classifier;
+	intent_classifier -.-> role_authorizer;
+	intent_classifier -.-> sql_generator;
+	modification_validator -. &nbsp;abort&nbsp; .-> __end__;
+	modification_validator -. &nbsp;confirmation&nbsp; .-> sql_executor;
+	role_authorizer -. &nbsp;abort&nbsp; .-> __end__;
+	role_authorizer -.-> sql_generator;
+	sql_executor -. &nbsp;abort&nbsp; .-> __end__;
+	sql_executor -.-> result_analyst;
+	sql_generator -.-> modification_validator;
+	sql_generator -.-> sql_validator;
+	sql_validator -. &nbsp;abort&nbsp; .-> __end__;
+	sql_validator -.-> sql_executor;
+	result_analyst --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+	classDef interrupt fill:#ffe0b2,stroke:#ff9800,stroke-width:2px,color:#000
+	class modification_validator interrupt

@@ -4,17 +4,46 @@ A LangGraph-based SQL Copilot that translates natural language questions into SQ
 
 ## Architecture
 
-The SQL Copilot uses a 5-node LangGraph workflow:
+The SQL Copilot uses a 9-node LangGraph workflow with conditional routing and interruption support:
 
 ![Architecture](docs/graph.png)
 
-### Workflow
+### Nodes
 
 1. **Database Selector** - Routes questions to the most relevant database
-2. **SQL Generator** - Converts natural language to SQL using LLM
-3. **SQL Validator** - Ensures query safety (no destructive operations)
-4. **SQL Executor** - Runs the validated query against the database
-5. **Result Analyst** - Analyzes results and generates insights
+2. **Intent Classifier** - Determines if user request is a query or modification
+3. **Role Authorizer** - Checks if user has permission for modification operations
+4. **SQL Generator** - Converts natural language to SQL using LLM
+5. **SQL Validator** - Ensures query safety for SELECT operations (no destructive operations)
+6. **Modification Validator** - Manages interruption/confirmation workflow for modifications
+7. **SQL Executor** - Runs the validated query against the database
+8. **Result Analyst** - Analyzes results and generates insights
+
+### Edge Routing
+
+- **database_selector** → intent_classifier (abort if database selection fails)
+- **intent_classifier** → role_authorizer (for modifications) or sql_generator (for queries)
+- **role_authorizer** → sql_generator (authorized) or abort (unauthorized)
+- **sql_generator** → sql_validator (queries) or modification_validator (modifications)
+- **sql_validator** → sql_executor (valid) or abort (invalid)
+- **modification_validator** → sql_executor (confirmed) or abort (cancelled)
+- **sql_executor** → result_analyst (success) or abort (error)
+- **result_analyst** → end
+
+### Interruption Workflow
+
+The **Modification Validator** node pauses execution and waits for user confirmation before executing modifications. This ensures users can review potentially destructive operations (INSERT/UPDATE/DELETE) before they run:
+
+1. User makes a modification request
+2. Intent classifier routes to modification path
+3. Role authorizer checks permissions
+4. SQL generator creates the modification query
+5. **Modification validator interrupts** - waits for user confirmation
+6. User reviews and confirms/cancels
+7. If confirmed → SQL executor runs the query
+8. If cancelled → graph aborts
+
+This interruption mechanism is a key safety feature of the SQL Copilot.
 
 ## Authentication System
 
