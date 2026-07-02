@@ -143,6 +143,10 @@ def _summarize_step_outcome(update: SQLAgentState) -> str:
         return "analysis_ready" 
     if "generated_sql" in update:
         return "sql_generated"
+    if "is_authorized" in update:
+        return "User role authorisation"
+    if "intent" in update:
+        return "Intention classified"
     if "selected_database" in update:
         return "database_selected"
     return "updated"

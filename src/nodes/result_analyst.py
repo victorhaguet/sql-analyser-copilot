@@ -93,7 +93,6 @@ class ResultAnalystNode:
             self.prompt_template_modification,
             question=state["question"],
             sql=state["generated_sql"],
-            result_payload=_serialize_result(result),
         )
         return {"analysis": extract_text_from_response(self.model.invoke(prompt))}
         

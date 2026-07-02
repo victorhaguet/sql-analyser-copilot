@@ -64,6 +64,7 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
     """
     node = step["node"]
     update = step["update"]
+    state = step["state"]
     metadata = update.get("metadata") or {}
 
     if node == "database_selector":
@@ -81,7 +82,31 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
         if update.get("execution_error"):
             lines.append(f"Error: {update['execution_error']}")
         body = "\n".join(lines)
-        return f"{format_trace_header('Ai Message')}\n{body}"
+        return f"{format_trace_header('Graph step')}\n{body}"
+    
+    if node == "intent_classifier":
+        lines = [f"Node: {node}", f"Outcome: {step['outcome']}"]
+        if update.get("intent"):
+            lines.append(f"User intent: {update.get("intent")}")
+        if update.get("intent_error"):
+            lines.append(f"Error: {update['intent_error']}")
+        elif update.get("needs_confirmation"):
+            lines.append("Needs user's confirmation.")
+        else:
+            lines.append("No need for user's confirmation.")
+        body = "\n".join(lines)
+        return f"{format_trace_header('Graph step')}\n{body}"
+    
+    if node == "role_authorizer":
+        lines = [f"Node: {node}", f"Outcome: {step['outcome']}"]
+        if update.get("user_role"):
+            lines.append(f"User Role: {update.get("user_role")}")
+        if update.get("is_authorized"):
+            lines.append(f"Is the user authorized to run the request ? : {update['is_authorized']}")
+        if update.get("authorization_error"):
+            lines.append(f"Error: {update['authorization_error']}")
+        body = "\n".join(lines)
+        return f"{format_trace_header('Graph step')}\n{body}"
 
     if node == "sql_generator":
         body = "\n".join(
@@ -91,10 +116,55 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
                 update.get("generated_sql", ""),
             ]
         ).strip()
-        return f"{format_trace_header('Ai Message')}\n{body}"
-
+        return f"{format_trace_header('Graph step')}\n{body}"
+    
+    if node == "__interrupt__":
+        lines = [f"Node: {node}", f"Outcome: {step['outcome']}"]
+        interrupt_data = update.get("interrupt", {})
+        if interrupt_data:
+            request = interrupt_data.get("request", "")
+            options = interrupt_data.get("options", [])
+    
+            if request:
+                lines.append(f"Request: {request}")
+            if options:
+                lines.append(f"Options: {options[0]}/{options[1]}")
+        
+        body = "\n".join(lines)
+        return f"{format_trace_header('Graph step')}\n{body}"
+    
+    if node == "sql_modification_validator":
+        lines = [f"Node: {node}", f"Outcome: {step['outcome']}"]
+        if update.get("execution_confirmed") is not None:
+            if update.get("execution_confirmed"):
+                body = "Request was approved.\nSQL execution will proceed."
+            else:
+                body = "Request was rejected.\nSQL execution was cancelled."
+        else:
+            # First interrupt event - use existing format
+            body = update.get("validated_sql") or update.get("sql_validation_error") or "(no output)"
+        return (
+            f"{format_trace_header('Tool Message')}\n"
+            f"Name: {node}\n\n"
+            f"{body}"
+        )
+    
     if node == "sql_validator":
         body = update.get("validated_sql") or update.get("sql_validation_error") or "(no output)"
+        return (
+            f"{format_trace_header('Tool Message')}\n"
+            f"Name: {node}\n\n"
+            f"{body}"
+        )
+    
+    if node == "sql_modification_validator":
+        lines = [f"Node: {node}", f"Outcome: {step['outcome']}"]
+        if update.get("execution_confirmed") is not None:
+            if update.get("execution_confirmed"):
+                lines.append("SQL query was approved")
+            else:
+                lines.append("SQL query was rejected")
+        body = "\n".join(lines)
         return (
             f"{format_trace_header('Tool Message')}\n"
             f"Name: {node}\n\n"
@@ -103,21 +173,34 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
 
     if node == "sql_executor":
         parts = [f"Outcome: {step['outcome']}"]
-        validated_sql = update.get("validated_sql")
-        if validated_sql:
-            parts.extend(["SQL:", str(validated_sql)])
-        if update.get("query_result") is not None:
-            parts.append(format_trace_payload(update["query_result"]))
-        elif update.get("execution_error"):
-            parts.append(f"Error: {update['execution_error']}")
-        return (
-            f"{format_trace_header('Tool Message')}\n"
-            f"Name: {node}\n\n"
-            f"{chr(10).join(parts)}"
-        )
+        if state.get("intent")=="query":
+            if state.get("validated_sql"):
+                parts.extend(["SQL:", str(state.get("validated_sql"))])
+            if update.get("query_result") is not None:
+                parts.append(format_trace_payload(update["query_result"]))
+            elif update.get("execution_error"):
+                parts.append(f"Error: {update['execution_error']}")
+            return (
+                f"{format_trace_header('Tool Message')}\n"
+                f"Name: {node}\n\n"
+                f"{chr(10).join(parts)}"
+            )
+        elif state.get("intent")=="modification":
+            if state.get("generated_sql"):
+                parts.extend(["SQL:", str(state.get("generated_sql"))])
+            if update.get("execution_error"):
+                parts.append(f"Error: {update['execution_error']}")
+            else:
+                parts.append("The SQL request was properly executed.")
+            return (
+                f"{format_trace_header('Tool Message')}\n"
+                f"Name: {node}\n\n"
+                f"{chr(10).join(parts)}"
+            )
+
 
     body = update.get("analysis") or format_trace_payload(update)
-    return f"{format_trace_header('Ai Message')}\n{body}"
+    return f"{format_trace_header('Graph step')}\n{body}"
 
 
 def build_trace_log_content(question: str, trace: list[SQLAgentTraceStep]) -> str:
