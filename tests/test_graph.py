@@ -517,7 +517,7 @@ class SQLGraphTestCase(unittest.TestCase):
             ["database_selector", "intent_classifier", "sql_generator", "sql_validator", "sql_executor", "result_analyst"],
         )
         self.assertEqual(steps[0]["outcome"], "database_selected")
-        self.assertEqual(steps[1]["outcome"], "updated")
+        self.assertEqual(steps[1]["outcome"], "Intention classified")
         self.assertEqual(steps[2]["outcome"], "sql_generated")
         self.assertEqual(steps[-1]["outcome"], "analysis_ready")
         self.assertEqual(steps[-1]["state"]["analysis"][:8], "Returned")
@@ -562,7 +562,7 @@ class SQLGraphTestCase(unittest.TestCase):
             ],
         )
         self.assertEqual(steps[0]["outcome"], "database_selected")
-        self.assertEqual(steps[1]["outcome"], "updated")
+        self.assertEqual(steps[1]["outcome"], "Intention classified")
 
     def test_stream_sql_agent_execution_with_values_mode(self) -> None:
         """Test streaming with values mode instead of updates mode."""
