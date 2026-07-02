@@ -87,7 +87,7 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
     if node == "intent_classifier":
         lines = [f"Node: {node}", f"Outcome: {step['outcome']}"]
         if update.get("intent"):
-            lines.append(f"User intent: {update.get("intent")}")
+            lines.append(f"User intent: {update.get('intent')}")
         if update.get("intent_error"):
             lines.append(f"Error: {update['intent_error']}")
         elif update.get("needs_confirmation"):
@@ -100,7 +100,7 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
     if node == "role_authorizer":
         lines = [f"Node: {node}", f"Outcome: {step['outcome']}"]
         if update.get("user_role"):
-            lines.append(f"User Role: {update.get("user_role")}")
+            lines.append(f"User Role: {update.get('user_role')}")
         if update.get("is_authorized"):
             lines.append(f"Is the user authorized to run the request ? : {update['is_authorized']}")
         if update.get("authorization_error"):
