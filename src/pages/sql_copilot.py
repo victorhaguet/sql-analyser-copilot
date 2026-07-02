@@ -333,12 +333,16 @@ def _render_results(result_state: dict[str, object]) -> None:
         result_state (dict[str, object]): _description_
     """
     _render_result_summary(result_state)
-
+    rejected_modification: bool = (
+        not result_state.get("execution_confirmed") and not result_state.get("execution_requested") and result_state.get("intent") == "modification"
+    )
     answer_tab, sql_tab, data_tab = st.tabs(["Answer", "SQL", "Result Preview"])
 
     with answer_tab:
         if result_state.get("has_error"):
             st.error(str(result_state.get("ai_answer") or "The request failed."))
+        elif rejected_modification:
+            st.warning("The SQL modification was rejected. Check the SQL tab to see the draft query.")
         else:
             st.write(str(result_state.get("ai_answer") or ""))
 
@@ -376,7 +380,7 @@ def _render_approval_dialog(
         st.caption(f"Request: {prompt_payload['request']}")
     st.code(sql_draft or "-- SQL will appear here", language="sql")
 
-    approve_col, reject_col = st.columns(2)
+    approve_col, reject_col = st.columns([4.5 ,1.5])
     with approve_col:
         if st.button("Approve", use_container_width=True, key="approve_sql_modification"):
             with st.spinner("Executing approved SQL..."):
@@ -389,7 +393,11 @@ def _render_approval_dialog(
             st.session_state["approval_dialog_open"] = False
             st.rerun()
     with reject_col:
-        if st.button("Reject", use_container_width=True, key="reject_sql_modification"):
+        if st.button(
+            "Reject", 
+            key="reject_sql_modification",
+            width="stretch"
+        ):
             with st.spinner("Rejecting SQL..."):
                 updated_state = call_confirmation_api(
                     str(result_state.get("thread_id") or ""),
