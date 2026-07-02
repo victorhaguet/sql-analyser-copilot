@@ -21,7 +21,7 @@ Additional directories at the root:
 |------|-------------|
 | `main.py` | FastAPI application entrypoint, API endpoints for authentication, user management, and query processing |
 | `core.py` | Core business logic for the SQL copilot, including graph execution and state serialization |
-| `graph.py` | LangGraph orchestration defining the SQL agent workflow with nodes and routing logic |
+| `graph.py` | LangGraph orchestration defining the SQL agent workflow with 9 nodes and conditional routing |
 | `config.py` | Application configuration, environment variable loading, and FastAPI app creation |
 | `models.py` | Pydantic models for API request/response schemas |
 | `state.py` | State definitions for the LangGraph workflow |
@@ -41,13 +41,16 @@ Handles user authentication and authorization.
 
 ### `nodes/` - Graph Nodes
 
-Individual processing nodes in the LangGraph workflow.
+Individual processing nodes in the LangGraph workflow with conditional routing.
 
 | File | Description |
 |------|-------------|
 | `database_selector.py` | Selects the appropriate database based on user input |
+| `intent_classifier.py` | Classifies user intent as query or modification |
+| `role_authorizer.py` | Checks user role authorization for modification operations |
 | `sql_generator.py` | Generates SQL queries from natural language using LLM |
-| `sql_validator.py` | Validates generated SQL for safety and correctness |
+| `sql_validator.py` | Validates SQL for safety (SELECT-only for queries) |
+| `sql_modification_validator.py` | Manages modification confirmation workflow |
 | `sql_executor.py` | Executes validated SQL queries against the database |
 | `result_analyst.py` | Analyzes query results and generates insights |
 
@@ -136,9 +139,24 @@ The test directory mirrors the source structure:
 ## Execution Flow
 
 1. **User Request** → FastAPI `/query` endpoint (`main.py:query`)
-2. **Database Selection** → `DatabaseSelectorNode` (`nodes/database_selector.py`)
-3. **SQL Generation** → `SQLGeneratorNode` (`nodes/sql_generator.py`)
-4. **SQL Validation** → `SQLValidatorNode` (`nodes/sql_validator.py`)
-5. **Query Execution** → `SQLExecutorNode` (`nodes/sql_executor.py`)
-6. **Result Analysis** → `ResultAnalystNode` (`nodes/result_analyst.py`)
-7. **Response** → Serialized state returned to client
+2. **Database Selection** → `DatabaseSelectorNode` (`nodes/database_selector.py`) or abort
+3. **Intent Classification** → `IntentClassifierNode` (`nodes/intent_classifier.py`)
+4. **Role Authorization** → `RoleAuthorizerNode` (`nodes/role_authorizer.py`) for modifications, or skip for queries
+5. **SQL Generation** → `SQLGeneratorNode` (`nodes/sql_generator.py`)
+6. **SQL Validation** → `SQLValidatorNode` (`nodes/sql_validator.py`) for queries, or `SQLModificationValidatorNode` (`nodes/sql_modification_validator.py`) for modifications
+7. **Query Execution** → `SQLExecutorNode` (`nodes/sql_executor.py`)
+8. **Result Analysis** → `ResultAnalystNode` (`nodes/result_analyst.py`) for successful queries
+9. **Response** → Serialized state returned to client
+
+### Conditional Routing
+
+The graph uses conditional edges to route execution based on state:
+
+- Database selection fails → abort
+- Intent is modification → role_authorizer → sql_generator
+- Intent is query → sql_generator directly
+- Authorization fails → abort
+- SQL is invalid → abort
+- Modification not confirmed → abort
+- Execution error → abort
+- Success → result_analyst → end
