@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from fastapi import FastAPI, Header, HTTPException # pylint: disable=unused-import
 
-from tools.database import DatabaseError
+from tools.database import DatabaseError, SQLiteDatabase
 from config import create_app_from_env
 from models import (
     LoginRequest,
@@ -25,7 +25,7 @@ from app_auth import (
     update_user,
     delete_user,
 )
-from core import _select_requested_databases, _serialize_state, resume_question, start_question
+from core import _serialize_state, resume_question, start_question
 
 app = create_app_from_env()
 
@@ -250,18 +250,18 @@ def query(payload: QueryRequest, x_user_sub: str = Header(...), x_user_role: str
     """
     get_user_by_sub(x_user_sub)
 
+    database = None
+    if payload.selected_database:
+        database = SQLiteDatabase()
+
     try:
-        databases = _select_requested_databases(
-            payload.selected_databases,
-            app.state.databases,
-        )
         result = start_question(
             question=payload.question,
             sql_generator_model=app.state.sql_generator_model,
             analyst_model=app.state.analyst_model,
             selector_model=app.state.selector_model,
             intent_model=app.state.intent_model,
-            databases=databases,
+            selected_database=database,
             validator=app.state.validator,
             execution_limit=payload.execution_limit,
             include_trace=app.state.enable_trace,

@@ -8,13 +8,7 @@ from typing import Any
 from utils.nodes import LLM, load_prompt, render_prompt
 from utils.llm import extract_text_from_response, strip_code_fences
 from state import SQLAgentState
-from tools.database import (
-    SQLiteDatabase,
-    format_database_schema,
-    get_default_database,
-    RegisteredDatabase
-)
-from nodes import get_database
+from tools.database import SQLiteDatabase, format_database_schema
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "sql_generator.j2"
 
@@ -25,14 +19,12 @@ class SQLGeneratorNode:
     def __init__(
         self,
         model: LLM,
-        database: SQLiteDatabase | None = None,
-        database_catalog: list[RegisteredDatabase] | None = None,
+        database: SQLiteDatabase,
         prompt_template: str | None = None,
     ) -> None:
         """Initialize the SQLGeneratorNode."""
         self.model = model
-        self.database = database or get_default_database()
-        self.database_catalog = database_catalog
+        self.database = database
         self.prompt_template = prompt_template or load_prompt(
             PROMPT_PATH,
             (
@@ -57,8 +49,7 @@ class SQLGeneratorNode:
         """
         question = state["question"]
 
-        selected_database = get_database(state, self.database, self.database_catalog)
-        schema_overview = state.get("schema_overview") or format_database_schema(selected_database)
+        schema_overview = state.get("schema_overview") or format_database_schema(self.database)
         prompt = render_prompt(
             self.prompt_template,
             question=question,

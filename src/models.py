@@ -15,7 +15,7 @@ class QueryRequest(BaseModel):
 
     question: str = Field(min_length=1)
     execution_limit: int = Field(default=200, gt=0)
-    selected_databases: list[str] | None = None
+    selected_database: str | None = None
 
 
 class QueryResumeRequest(BaseModel):

@@ -67,16 +67,11 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
     state = step["state"]
     metadata = update.get("metadata") or {}
 
-    if node == "database_selector":
+    if node == "database_checker":
         selected_database = metadata.get("selected_database")
         lines = [f"Node: {node}", f"Outcome: {step['outcome']}"]
         if selected_database:
             lines.append(f"Selected Database: {selected_database}")
-        if metadata.get("candidate_databases"):
-            lines.append(
-                "Candidate Databases: "
-                + ", ".join(cast(list[str], metadata["candidate_databases"]))
-            )
         if metadata.get("database_selection_reason"):
             lines.append(f"Reason: {metadata['database_selection_reason']}")
         if update.get("execution_error"):
