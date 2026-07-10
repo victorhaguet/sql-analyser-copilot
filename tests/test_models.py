@@ -30,7 +30,7 @@ class ModelsTestCase(unittest.TestCase):
         request = QueryRequest(question="Test question")
         self.assertEqual(request.question, "Test question")
         self.assertEqual(request.execution_limit, 200)
-        self.assertIsNone(request.selected_databases)
+        self.assertIsNone(request.selected_database)
 
     def test_query_request_validation_with_custom_limit(self) -> None:
         """QueryRequest should accept custom execution_limit."""

@@ -17,7 +17,7 @@ from langgraph.types import Interrupt
 from graph import INTERRUPT_EVENT, _normalize_stream_event
 from state import SQLAgentState
 from graph import _summarize_step_outcome
-from tests.test_db.helpers import fixture_registered_database
+from tools.database import SQLiteDatabase
 
 SQLAgentStateUpdate = SQLAgentState
 
@@ -175,10 +175,10 @@ class TestSummarizeStepOutcome(unittest.TestCase):
         result = _summarize_step_outcome({"generated_sql": "SELECT * FROM t"})
         self.assertEqual(result, "sql_generated")
 
-    def test_summarize_database_selected(self) -> None:
+    def test_summarize_database_checked(self) -> None:
         """Test summarization when database is selected."""
         result = _summarize_step_outcome({"selected_database": "db1"})# type: ignore[typeddict-item]
-        self.assertEqual(result, "database_selected")
+        self.assertEqual(result, "database_checked")
 
     def test_summarize_updated(self) -> None:
         """Test summarization for default case."""
@@ -340,6 +340,7 @@ class FakeCompiledGraph:
         self,
         state: dict[str, object],
         *,
+        config: object | None = None,
         stream_mode: str = "updates",
     ):
         current = self.builder.start_target
@@ -388,7 +389,7 @@ class FakeStateGraph:
     ) -> None:
         self.conditional_edges[source] = (router, mapping)
 
-    def compile(self) -> FakeCompiledGraph:
+    def compile(self, checkpointer=None) -> FakeCompiledGraph:
         return FakeCompiledGraph(self)
 
 
@@ -433,8 +434,9 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel("DELETE FROM Artist"),
+            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
             intent_model=FakeModel('{"intent": "query"}'),
-            databases=[fixture_registered_database()],
+            selected_database=SQLiteDatabase(),
         )
         result = graph.invoke({"question": "Delete artists"}, config=build_thread_config())
         self.assertIn("sql_validation_error", result)
@@ -447,11 +449,12 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel("SELECT * FROM Artist"),
+            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
             intent_model=FakeModel('{"intent": "query"}'),
-            databases=[fixture_registered_database()],
+            selected_database=SQLiteDatabase(),
         )
         result = graph.invoke(
-            {"question": "Select from Artist"},
+            {"question": "Select from Artist", "selected_database": "chinook"},
             config=build_thread_config(),
         )
         self.assertIn("query_result", result)
@@ -465,12 +468,9 @@ class SQLGraphTestCase(unittest.TestCase):
         graph = build_sql_agent_graph(
             FakeModel("SELECT Name FROM Artist"),
             selector_model=FakeModel(
-                '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
+                '{"match": false, "database": "", "reason": "No configured database matches."}'
             ),
-            databases=[
-                fixture_registered_database(name="music", description="Music data"),
-                fixture_registered_database(name="sales", description="Sales data"),
-            ],
+            selected_database=SQLiteDatabase(),
         )
         result = graph.invoke(
             {"question": "What is the weather in Berlin?"},
@@ -486,18 +486,15 @@ class SQLGraphTestCase(unittest.TestCase):
         graph = build_sql_agent_graph(
             FakeModel("SELECT Name FROM Artist"),
             selector_model=FakeModel(
-                '{"match": false, "database": "", "candidate_databases": ["music", "sales"], "reason": "The question could be answered from either catalog."}'
+                '{"match": false, "database": "", "reason": "Question does not relate to database."}'
             ),
-            databases=[
-                fixture_registered_database(name="music", description="Music data"),
-                fixture_registered_database(name="sales", description="Sales data"),
-            ],
+            selected_database=SQLiteDatabase(),
         )
         result = graph.invoke(
             {"question": "Show me recent invoice activity."},
             config=build_thread_config(),
         )
-        self.assertTrue(result["metadata"]["database_selection_ambiguous"])
+        self.assertTrue(result["metadata"]["database_selection_failed"])
         self.assertNotIn("generated_sql", result)
 
     def test_stream_sql_agent_execution_yields_normalized_steps(self) -> None:
@@ -506,17 +503,18 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel('SELECT Name FROM Artist WHERE ArtistId = 1'),
+            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
             intent_model=FakeModel('{"intent": "query"}'),
-            databases=[fixture_registered_database()],
+            selected_database=SQLiteDatabase(),
         )
 
         steps = list(stream_sql_agent_execution(graph, {"question": "Who is artist 1?"}))
 
         self.assertEqual(
             [step["node"] for step in steps],
-            ["database_selector", "intent_classifier", "sql_generator", "sql_validator", "sql_executor", "result_analyst"],
+            ["database_checker", "intent_classifier", "sql_generator", "sql_validator", "sql_executor", "result_analyst"],
         )
-        self.assertEqual(steps[0]["outcome"], "database_selected")
+        self.assertEqual(steps[0]["outcome"], "database_checked")
         self.assertEqual(steps[1]["outcome"], "Intention classified")
         self.assertEqual(steps[2]["outcome"], "sql_generated")
         self.assertEqual(steps[-1]["outcome"], "analysis_ready")
@@ -528,7 +526,8 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel('{"intent": "modification"}'),
-            databases=[fixture_registered_database()],
+            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+            selected_database=SQLiteDatabase(),
         )
         result = graph.invoke(
             {"question": "Delete all artists"},
@@ -544,8 +543,9 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel('SELECT Name FROM Artist WHERE ArtistId = 1'),
+            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
             intent_model=FakeModel('{"intent": "query"}'),
-            databases=[fixture_registered_database()],
+            selected_database=SQLiteDatabase(),
         )
 
         steps = list(stream_sql_agent_execution(graph, {"question": "Who is artist 1?"}))
@@ -553,7 +553,7 @@ class SQLGraphTestCase(unittest.TestCase):
         self.assertEqual(
             [step["node"] for step in steps],
             [
-                "database_selector",
+                "database_checker",
                 "intent_classifier",
                 "sql_generator",
                 "sql_validator",
@@ -561,7 +561,7 @@ class SQLGraphTestCase(unittest.TestCase):
                 "result_analyst",
             ],
         )
-        self.assertEqual(steps[0]["outcome"], "database_selected")
+        self.assertEqual(steps[0]["outcome"], "database_checked")
         self.assertEqual(steps[1]["outcome"], "Intention classified")
 
     def test_stream_sql_agent_execution_with_values_mode(self) -> None:
@@ -571,7 +571,7 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel("SELECT Name FROM Artist WHERE ArtistId = 1"),
-            databases=[fixture_registered_database()],
+            selected_database=SQLiteDatabase(),
         )
 
         steps = list(
