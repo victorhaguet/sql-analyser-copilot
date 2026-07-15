@@ -21,7 +21,7 @@ def call_api(
     question: str,
     execution_limit: int,
     api_base_url: str,
-    selected_databases: list[str],
+    selected_database: str | None,
 ) -> dict[str, object]:
     """Call the SQL copilot
 
@@ -29,7 +29,7 @@ def call_api(
         question (str): User question
         execution_limit (int): Execution limit (max number of rows in the answer)
         api_base_url (str): Base URL of the fast API backend
-        selected_databases (list[str]): Database studied
+        selected_database (str | None): Database to query
 
     Returns:
         dict[str, object]: Result of the question
@@ -55,7 +55,7 @@ def call_api(
             json={
                 "question": clean_question,
                 "execution_limit": execution_limit,
-                "selected_databases": selected_databases,
+                "selected_database": selected_database,
             },
             headers=headers,
             timeout=120.0,
@@ -146,28 +146,28 @@ def _initialize_state() -> None:
     """Initialize the state of the page"""
     st.session_state.setdefault("question_input", DEFAULT_QUESTION)
     st.session_state.setdefault("result_state", build_empty_result_state())
-    st.session_state.setdefault("selected_databases", [])
+    st.session_state.setdefault("selected_database", None)
     st.session_state.setdefault("approval_dialog_open", False)
 
 
-def _sync_selected_databases(databases: list[RegisteredDatabase]) -> list[str]:
-    """Sync selected databases with session state
+def _sync_selected_database(databases: list[RegisteredDatabase]) -> str | None:
+    """Sync selected database with session state
 
     Args:
-        databases (list[RegisteredDatabase]): All the databases selected by the user
+        databases (list[RegisteredDatabase]): All the databases available
 
     Returns:
-        list[str]: List of the databases selected
+        str | None: The selected database name
     """
     available_names = [database.name for database in databases]
-    current_selection = [
-        name
-        for name in st.session_state.get("selected_databases", [])
-        if name in available_names
-    ]
-    if not current_selection:
-        current_selection = available_names.copy()
-    st.session_state["selected_databases"] = current_selection
+    current_selection = st.session_state.get("selected_database")
+    
+    if current_selection is None or current_selection not in available_names:
+        if available_names:
+            st.session_state["selected_database"] = available_names[0]
+            return available_names[0]
+        return None
+    
     return current_selection
 
 
@@ -191,63 +191,54 @@ def _load_database_catalog() -> tuple[list[RegisteredDatabase], str | None]:
         return [], str(exc)
 
 
-def _render_database_catalog() -> list[str]:
-    """Render databases catalog.
-    Each database has one container where the user can access to its metadata and select/unselect it.
+def _render_database_catalog() -> str | None:
+    """Render databases catalog as single-select dropdown.
 
     Returns:
-        list[str]: List of selected databases
+        str | None: The selected database name
     """
     databases, error_message = _load_database_catalog()
 
     with st.container(border=True, key="database-catalog"):
-        st.text("Available databases")
+        st.text("Database selection")
 
         if error_message:
             st.error(f"Database catalog configuration is invalid: {error_message}")
-            return []
+            return None
 
         if not databases:
-            st.info("No databases are configured.")
-            return []
+            st.error("No databases are configured. Please add at least one database to the data/ folder.")
+            return None
 
-        selected_databases = _sync_selected_databases(databases)
-        selected_count = len(selected_databases)
-        st.caption(f"{selected_count} of {len(databases)} databases active")
+        selected_database = _sync_selected_database(databases)
+        
+        if selected_database is None:
+            st.error("No database available for selection.")
+            return None
 
-        columns = st.columns(min(len(databases), 3), gap="small")
-        for index, database_entry in enumerate(databases):
-            metadata = database_entry.database.describe()
+        database_options = {db.name: db for db in databases}
+        
+        selected_name = st.selectbox(
+            "Choose the database to query:",
+            options=list(database_options.keys()),
+            index=list(database_options.keys()).index(selected_database) if selected_database else 0,
+            key="database_dropdown",
+        )
+        
+        if selected_name and selected_name != selected_database:
+            st.session_state["selected_database"] = selected_name
+            st.rerun()
+
+        if selected_name and selected_name in database_options:
+            db = database_options[selected_name]
+            metadata = db.database.describe()
             table_count = len(metadata.get("tables") or [])
-            is_selected = database_entry.name in selected_databases
-            disabled = is_selected and selected_count == 1
-            with columns[index % len(columns)]:
-                with st.container(border=True):
-                    st.markdown(f"**{database_entry.name}**")
-                    st.caption("Selected" if is_selected else "Inactive")
-                    st.write(database_entry.description)
-                    st.caption(
-                        f"{table_count} tables • {Path(str(metadata['database_path'])).name}"
-                    )
-                    updated_value = st.toggle(
-                        "Use this database",
-                        value=is_selected,
-                        key=f"database-toggle::{database_entry.name}",
-                        disabled=disabled,
-                    )
-                    if updated_value != is_selected:
-                        if updated_value:
-                            selected_databases.append(database_entry.name)
-                        else:
-                            selected_databases = [
-                                name
-                                for name in selected_databases
-                                if name != database_entry.name
-                            ]
-                        st.session_state["selected_databases"] = selected_databases
-                        st.rerun()
+            with st.expander("Database details", expanded=False):
+                st.write(f"**Description:** {db.description}")
+                st.caption(f"{table_count} tables • {Path(str(metadata['database_path'])).name}")
+                st.code("Tables:\n" + "\n".join(f"- {t}" for t in metadata.get("tables", [])), language="text")
 
-        return st.session_state["selected_databases"]
+        return selected_name
 
 
 def _render_question_panel() ->bool:
@@ -420,7 +411,7 @@ def render_sql_copilot_page() -> None:
     api_base_url = st.session_state.get("api_base_url", DEFAULT_API_BASE_URL)
 
     _render_header()
-    selected_databases = _render_database_catalog()
+    selected_database = _render_database_catalog()
     submitted = _render_question_panel()
 
     question = st.session_state.get("question_input", "")
@@ -428,14 +419,21 @@ def render_sql_copilot_page() -> None:
     result_state = st.session_state["result_state"]
 
     if submitted:
-        with st.spinner("Running query pipeline..."):
-            result_state = call_api(
-                question=question,
-                execution_limit=execution_limit,
-                api_base_url=api_base_url,
-                selected_databases=selected_databases,
-            )
+        if not selected_database:
+            result_state = build_empty_result_state()
+            result_state["ai_answer"] = "No database selected. Please choose a database from the dropdown."
+            result_state["has_error"] = True
+            result_state["error_message"] = "Missing database selection"
             st.session_state["result_state"] = result_state
+        else:
+            with st.spinner("Running query pipeline..."):
+                result_state = call_api(
+                    question=question,
+                    execution_limit=execution_limit,
+                    api_base_url=api_base_url,
+                    selected_database=selected_database,
+                )
+                st.session_state["result_state"] = result_state
             st.session_state["approval_dialog_open"] = bool(
                 result_state.get("execution_requested")
                 and not result_state.get("execution_confirmed")

@@ -83,15 +83,14 @@ class TracingTestCase(unittest.TestCase):
         self.assertIn("Row Count: 1", result)
         self.assertIn("Truncated: False", result)
 
-    def test_format_trace_step_database_selector(self) -> None:
-        """format_trace_step should format database_selector node."""
+    def test_format_trace_step_database_checker(self) -> None:
+        """format_trace_step should format database_checker node."""
         
         step = build_trace_step(
-            "database_selector",
+            "database_checker",
             {
                 "metadata": {
                     "selected_database": "test_db",
-                    "candidate_databases": ["db1", "db2"],
                     "database_selection_reason": "Matches question",
                 }
             },
@@ -99,22 +98,21 @@ class TracingTestCase(unittest.TestCase):
         
         result = format_trace_step(step)
         
-        self.assertIn("Node: database_selector", result)
+        self.assertIn("Node: database_checker", result)
         self.assertIn("Outcome: success", result)
         self.assertIn("Selected Database: test_db", result)
-        self.assertIn("Candidate Databases: db1, db2", result)
         self.assertIn("Reason: Matches question", result)
 
-    def test_format_trace_step_database_selector_with_error(self) -> None:
-        """database_selector should include execution errors in the trace."""
+    def test_format_trace_step_database_checker_with_error(self) -> None:
+        """database_checker should include execution errors in the trace."""
         result = format_trace_step(
             build_trace_step(
-                "database_selector",
-                {"metadata": {}, "execution_error": "No database matched"},
+                "database_checker",
+                {"metadata": {}, "execution_error": "Question does not relate to database"},
                 outcome="database_selection_failed",
             )
         )
-        self.assertIn("Error: No database matched", result)
+        self.assertIn("Error: Question does not relate to database", result)
 
     def test_format_trace_step_intent_classifier_with_confirmation(self) -> None:
         """intent_classifier should note when confirmation is required."""
@@ -331,7 +329,7 @@ class TracingTestCase(unittest.TestCase):
         """build_trace_log_content should build complete trace log."""
 
         trace = [
-            build_trace_step("database_selector", {"metadata": {}}),
+            build_trace_step("database_checker", {"metadata": {}}),
         ]
         
         result = build_trace_log_content("Test question", trace)
@@ -344,7 +342,7 @@ class TracingTestCase(unittest.TestCase):
         """write_trace_log should create log file."""
         
         trace = [
-            build_trace_step("database_selector", {"metadata": {}}),
+            build_trace_step("database_checker", {"metadata": {}}),
         ]
         
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -403,7 +401,7 @@ class TracingTestCase(unittest.TestCase):
         """write_trace_log should use default TRACE_LOG_DIR when not specified."""
         
         trace = [
-            build_trace_step("database_selector", {"metadata": {}}),
+            build_trace_step("database_checker", {"metadata": {}}),
         ]
         
         with tempfile.TemporaryDirectory() as temp_dir:

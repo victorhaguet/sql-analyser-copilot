@@ -11,7 +11,7 @@ from langgraph.types import Command, Interrupt
 from graph import SQLAgentTraceStep, build_sql_agent_graph, stream_sql_agent_execution
 from nodes.sql_generator import LLM
 from state import SQLAgentState
-from tools.database import DatabaseError, RegisteredDatabase, QueryResult
+from tools.database import QueryResult, SQLiteDatabase
 from tools.sql_safety import SQLSafetyValidator
 from tracing import write_trace_log
 
@@ -26,46 +26,6 @@ class PendingApprovalSession:
     question: str
     user_sub: str
     trace_log_path: Path | None = None
-
-
-def _select_requested_databases(
-    requested_names: list[str] | None,
-    configured_databases: list[RegisteredDatabase] | None,
-) -> list[RegisteredDatabase] | None:
-    """Resolve the database subset requested by the client.
-
-    Args:
-        requested_names: Optional list of database names selected by the client.
-        configured_databases: The configured database catalog for the app.
-
-    Returns:
-        The filtered catalog, or the original configured catalog when no subset was requested.
-
-    Raises:
-        DatabaseError: If the requested selection is empty or contains unknown names.
-    """
-    if configured_databases is None or requested_names is None:
-        return configured_databases
-    if not requested_names:
-        raise DatabaseError("At least one database must be selected.")
-
-    configured_by_name = {database.name: database for database in configured_databases}
-    selected_databases: list[RegisteredDatabase] = []
-    unknown_names: list[str] = []
-    for name in requested_names:
-        database = configured_by_name.get(name)
-        if database is None:
-            unknown_names.append(name)
-            continue
-        selected_databases.append(database)
-
-    if unknown_names:
-        raise DatabaseError(
-            "Unknown databases requested: " + ", ".join(sorted(set(unknown_names)))
-        )
-    if not selected_databases:
-        raise DatabaseError("At least one database must be selected.")
-    return selected_databases
 
 
 def _serialize_user(user: dict[str, Any]) -> dict[str, Any]:
@@ -191,7 +151,7 @@ def _snapshot_to_state(snapshot: Any, fallback: SQLAgentState) -> SQLAgentState:
 
     values = getattr(snapshot, "values", None)
     if not isinstance(values, dict):
-        return dict(fallback)
+        return fallback
     return cast(SQLAgentState, dict(values))
 
 
@@ -258,7 +218,7 @@ def start_question(
     analyst_model: LLM | None = None,
     selector_model: LLM | None = None,
     intent_model: LLM | None = None,
-    databases: list[RegisteredDatabase] | None = None,
+    selected_database: SQLiteDatabase | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
     include_trace: bool = False,
@@ -276,7 +236,7 @@ def start_question(
         analyst_model=analyst_model,
         selector_model=selector_model,
         intent_model=intent_model,
-        databases=databases,
+        selected_database=selected_database,
         validator=validator,
         execution_limit=execution_limit,
     )
@@ -284,6 +244,8 @@ def start_question(
         "question": question,
         "user_role": user_role,
     }
+    if selected_database is not None:
+        initial_state["selected_database"] = selected_database.name if hasattr(selected_database, 'name') else "default"
 
     if include_trace:
         trace = list(
@@ -436,7 +398,7 @@ def answer_question(
     analyst_model: LLM | None = None,
     selector_model: LLM | None = None,
     intent_model: LLM | None = None,
-    databases: list[RegisteredDatabase] | None = None,
+    selected_database: SQLiteDatabase | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
     include_trace: bool = False,
@@ -451,13 +413,12 @@ def answer_question(
         analyst_model: The language model to use for result analysis (optional).
         selector_model: The language model to use for database selection (optional).
         intent_model: The language model to use for intent classification (optional).
-        databases: The registered databases available for routing (optional).
+        selected_database: The SQLiteDatabase instance to query (optional).
         validator: The SQLSafetyValidator instance to use for query validation (optional).
         execution_limit: The maximum number of rows to return from query execution (default: 200).
         include_trace: When true, attach a normalized per-step execution trace to `metadata["execution_trace"]`.
         trace_log_dir: Optional directory where per-run trace logs are persisted. Defaults to `logs/`.
         user_role: The role of the authenticated user (default: readonly).
-        needs_confirmation: Whether user confirmation is required before execution (default: False).
 
     Returns:
         An instance of SQLAgentState representing the state of the SQL copilot graph after processing the question.
@@ -468,12 +429,13 @@ def answer_question(
         analyst_model=analyst_model,
         selector_model=selector_model,
         intent_model=intent_model,
-        databases=databases,
+        selected_database=selected_database,
         validator=validator,
         execution_limit=execution_limit,
         include_trace=include_trace,
         trace_log_dir=trace_log_dir,
         user_role=user_role,
+        pending_approval_sessions=None,
     )
 
 
@@ -483,7 +445,7 @@ def stream_question(
     analyst_model: LLM | None = None,
     selector_model: LLM | None = None,
     intent_model: LLM | None = None,
-    databases: list[RegisteredDatabase] | None = None,
+    selected_database: SQLiteDatabase | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
     user_role: str = "readonly",
@@ -499,11 +461,10 @@ def stream_question(
         analyst_model: The language model to use for result analysis (optional).
         selector_model: The language model to use for database selection (optional).
         intent_model: The language model to use for intent classification (optional).
-        databases: The registered databases available for routing (optional).
+        selected_database: The SQLiteDatabase instance to query (optional).
         validator: The SQLSafetyValidator instance to use for query validation (optional).
         execution_limit: The maximum number of rows to return from query execution (default: 200).
         user_role: The role of the authenticated user (default: readonly).
-        needs_confirmation: Whether user confirmation is required before execution (default: False).
 
     Returns:
         An iterator of SQLAgentTraceStep dictionaries representing the execution trace of the graph.
@@ -513,7 +474,7 @@ def stream_question(
         analyst_model=analyst_model,
         selector_model=selector_model,
         intent_model=intent_model,
-        databases=databases,
+        selected_database=selected_database,
         validator=validator,
         execution_limit=execution_limit,
     )
@@ -521,4 +482,6 @@ def stream_question(
         "question": question,
         "user_role": user_role,
     }
+    if selected_database is not None:
+        initial_state["selected_database"] = "default"
     return stream_sql_agent_execution(graph, initial_state)

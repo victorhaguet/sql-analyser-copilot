@@ -320,38 +320,6 @@ def get_default_database() -> SQLiteDatabase:
     return SQLiteDatabase()
 
 
-def get_default_database_catalog() -> list[RegisteredDatabase]:
-    """
-    Return the default database catalog.
-    
-    First tries to auto-discover SQLite databases in the data/ directory.
-    If none found, falls back to Chinook database.
-    """
-    data_dir = _project_root / "data"
-    if data_dir.exists():
-        sqlite_files = list(data_dir.glob("*.sqlite")) + list(data_dir.glob("*.db"))
-        if sqlite_files:
-            return [
-                register_database(
-                    SQLiteDatabase(str(db_path)),
-                    name=db_path.stem,
-                    description=f"SQLite database: {db_path.name}",
-                )
-                for db_path in sqlite_files
-            ]
-    
-    return [
-        register_database(
-            get_default_database(),
-            name="chinook",
-            description=(
-                "Music store database with artists, albums, tracks, genres, customers, "
-                "employees, invoices, and invoice lines."
-            ),
-        )
-    ]
-
-
 def load_database_catalog_from_env() -> list[RegisteredDatabase]:
     """
     Load the database catalog from `SQL_COPILOT_DATABASES`.
@@ -364,7 +332,7 @@ def load_database_catalog_from_env() -> list[RegisteredDatabase]:
     """
     raw_catalog = os.getenv("SQL_COPILOT_DATABASES", "").strip()
     if not raw_catalog:
-        return get_default_database_catalog()
+         return [register_database(get_default_database())] 
 
     try:
         entries = json.loads(raw_catalog)

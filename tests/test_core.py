@@ -16,14 +16,13 @@ for parent in Path(__file__).resolve().parents:
         break
 
 from langgraph.types import Interrupt
-from tools.database import DatabaseError
+from tools.database import DatabaseError, SQLiteDatabase
 from core import (
     PendingApprovalSession,
     answer_question,
     stream_question,
     start_question,
     resume_question,
-    _select_requested_databases,
     _serialize_interrupt,
     _extract_interrupt_payload,
     _snapshot_to_state,
@@ -207,7 +206,9 @@ class CoreTestCase(unittest.TestCase):
     def test_answer_question_runs_full_pipeline(self) -> None:
         """Test that the answer_question function correctly orchestrates the full pipeline from question to analysis."""
         
-
+        # Mock the selector model to always match
+        selector_model = FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}')
+        
         generator_model = FakeModel(
             "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
         )
@@ -217,8 +218,9 @@ class CoreTestCase(unittest.TestCase):
             question="What are the first two artists?",
             sql_generator_model=generator_model,
             analyst_model=analyst_model,
+            selector_model=selector_model,
             intent_model=intent_model,
-            databases=[fixture_registered_database()],
+            selected_database=SQLiteDatabase(),
         )
         self.assertEqual(
             result["validated_sql"],
@@ -237,13 +239,15 @@ class CoreTestCase(unittest.TestCase):
             "ORDER BY AlbumCount DESC "
             "LIMIT 5"
         )
+        selector_model = FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}')
         with tempfile.TemporaryDirectory() as temp_dir:
             result = answer_question(
                 question="Which 5 artists have the most albums ?",
                 sql_generator_model=FakeModel(sql_query),
                 analyst_model=FakeModel("Top artists returned."),
+                selector_model=selector_model,
                 intent_model=FakeModel('{"intent": "query"}'),
-                databases=[fixture_registered_database()],
+                selected_database=SQLiteDatabase(),
                 include_trace=True,
                 trace_log_dir=temp_dir,
             )
@@ -264,10 +268,7 @@ class CoreTestCase(unittest.TestCase):
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
             ),
             intent_model=FakeModel('{"intent": "query"}'),
-            databases=[
-                fixture_registered_database(name="music", description="Music data"),
-                fixture_registered_database(name="sales", description="Sales data"),
-            ],
+            selected_database=SQLiteDatabase(),
         )
         self.assertIn("No configured database matches.", result["analysis"])
         self.assertNotIn("generated_sql", result)
@@ -282,28 +283,9 @@ class CoreTestCase(unittest.TestCase):
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "This question is unrelated to the configured database."}'
             ),
             intent_model=FakeModel('{"intent": "query"}'),
-            databases=[fixture_registered_database()],
+            selected_database=SQLiteDatabase(),
         )
         self.assertIn("unrelated to the configured database", result["analysis"])
-        self.assertNotIn("generated_sql", result)
-
-    def test_answer_question_returns_ambiguity_error_when_multiple_databases_match(self) -> None:
-        """The entrypoint should stop before SQL generation for ambiguous routing."""
-
-        result = answer_question(
-            question="Show me recent invoice activity.",
-            sql_generator_model=FakeModel("SELECT Name FROM Artist"),
-            selector_model=FakeModel(
-                '{"match": false, "database": "", "candidate_databases": ["music", "sales"], "reason": "The question could be answered from either catalog."}'
-            ),
-            intent_model=FakeModel('{"intent": "query"}'),
-            databases=[
-                fixture_registered_database(name="music", description="Music data"),
-                fixture_registered_database(name="sales", description="Sales data"),
-            ],
-        )
-        self.assertTrue(result["metadata"]["database_selection_ambiguous"])
-        self.assertEqual(result["metadata"]["candidate_databases"], ["music", "sales"])
         self.assertNotIn("generated_sql", result)
 
     def test_answer_question_rejects_modification_intent(self) -> None:
@@ -315,7 +297,7 @@ class CoreTestCase(unittest.TestCase):
                 '{"match": true, "database": "music", "candidate_databases": [], "reason": "Match found"}'
             ),
             intent_model=FakeModel('{"intent": "modification"}'),
-            databases=[fixture_registered_database(name="music", description="Music data")],
+            selected_database=SQLiteDatabase(),
         )
         self.assertIn("authorization_error", result)
         self.assertEqual(result["intent"], "modification")
@@ -331,14 +313,15 @@ class CoreTestCase(unittest.TestCase):
                     "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
+                selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
                 intent_model=FakeModel('{"intent": "query"}'),
-                databases=[fixture_registered_database()],
+                selected_database=SQLiteDatabase(),
                 include_trace=True,
                 trace_log_dir=temp_dir,
             )
 
             trace = result["metadata"]["execution_trace"]
-            self.assertEqual(trace[0]["node"], "database_selector")
+            self.assertEqual(trace[0]["node"], "database_checker")
             self.assertEqual(trace[-1]["node"], "result_analyst")
             self.assertEqual(trace[-1]["update"]["analysis"], result["analysis"])
             self.assertTrue(Path(result["metadata"]["trace_log_path"]).exists())
@@ -353,8 +336,9 @@ class CoreTestCase(unittest.TestCase):
                     "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
+                selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
                 intent_model=FakeModel('{"intent": "query"}'),
-                databases=[fixture_registered_database()],
+                selected_database=SQLiteDatabase(),
                 include_trace=True,
                 trace_log_dir=temp_dir,
             )
@@ -378,7 +362,7 @@ class CoreTestCase(unittest.TestCase):
                 "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
             ),
             analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
-            databases=[fixture_registered_database()],
+            selected_database=SQLiteDatabase(),
             include_trace=False,
         )
         self.assertNotIn("execution_trace", result.get("metadata", {}))
@@ -391,13 +375,14 @@ class CoreTestCase(unittest.TestCase):
             stream_question(
                 question="Delete all artists",
                 sql_generator_model=FakeModel("DELETE FROM Artist"),
+                selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
                 intent_model=FakeModel('{"intent": "modification"}'),
-                databases=[fixture_registered_database(name="music", description="Music data")],
+                selected_database=SQLiteDatabase(),
             )
         )
 
         self.assertEqual(len(steps), 3)
-        self.assertEqual(steps[0]["node"], "database_selector")
+        self.assertEqual(steps[0]["node"], "database_checker")
         self.assertEqual(steps[1]["node"], "intent_classifier")
         self.assertEqual(steps[2]["node"], "role_authorizer")
         self.assertEqual(steps[2]["outcome"], "authorization_failed")
@@ -412,15 +397,12 @@ class CoreTestCase(unittest.TestCase):
                 selector_model=FakeModel(
                     '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
                 ),
-                databases=[
-                    fixture_registered_database(name="music", description="Music data"),
-                    fixture_registered_database(name="sales", description="Sales data"),
-                ],
+                selected_database=SQLiteDatabase(),
             )
         )
 
         self.assertEqual(len(steps), 1)
-        self.assertEqual(steps[0]["node"], "database_selector")
+        self.assertEqual(steps[0]["node"], "database_checker")
         self.assertEqual(steps[0]["outcome"], "database_selection_failed")
 
     def test_stream_question_exposes_execution_steps(self) -> None:
@@ -437,7 +419,7 @@ class CoreTestCase(unittest.TestCase):
                 sql_generator_model=generator_model,
                 analyst_model=analyst_model,
                 intent_model=FakeModel('{"intent": "query"}'),
-                databases=[fixture_registered_database()],
+                selected_database=SQLiteDatabase(),
             )
         )
 
@@ -447,50 +429,6 @@ class CoreTestCase(unittest.TestCase):
             self.assertIn("update", step)
             self.assertIn("outcome", step)
             self.assertIn("state", step)
-
-    def test_select_requested_databases_returns_all_when_no_filter(self) -> None:
-        """When no names requested, return all configured databases."""
-
-        db1 = fixture_registered_database(name="db1")
-        db2 = fixture_registered_database(name="db2")
-        result = _select_requested_databases(None, [db1, db2])
-        self.assertEqual(result, [db1, db2])
-
-    def test_select_requested_databases_returns_filtered_list(self) -> None:
-        """When names provided, return only matching databases."""
-
-        db1 = fixture_registered_database(name="db1")
-        db2 = fixture_registered_database(name="db2")
-        db3 = fixture_registered_database(name="db3")
-        result = _select_requested_databases(["db2", "db1"], [db1, db2, db3])
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result[0].name, "db2")
-        self.assertEqual(result[1].name, "db1")
-
-    def test_select_requested_databases_raises_on_empty_list(self) -> None:
-        """Empty requested names should raise DatabaseError."""
-
-        db1 = fixture_registered_database(name="db1")
-        with self.assertRaises(DatabaseError) as cm:
-            _select_requested_databases([], [db1])
-        self.assertIn("At least one database must be selected", str(cm.exception))
-
-    def test_select_requested_databases_raises_on_unknown_name(self) -> None:
-        """Unknown database names should raise DatabaseError."""
-
-        db1 = fixture_registered_database(name="db1")
-        with self.assertRaises(DatabaseError) as cm:
-            _select_requested_databases(["db1", "unknown"], [db1])
-        self.assertIn("Unknown databases requested", str(cm.exception))
-        self.assertIn("unknown", str(cm.exception))
-
-    def test_select_requested_databases_raises_when_all_unknown(self) -> None:
-        """When all requested names are unknown, raise error about unknown databases."""
-
-        db1 = fixture_registered_database(name="db1")
-        with self.assertRaises(DatabaseError) as cm:
-            _select_requested_databases(["unknown1", "unknown2"], [db1])
-        self.assertIn("Unknown databases requested", str(cm.exception))
 
     def test_serialize_user_returns_correct_dict(self) -> None:
         """Test user serialization with all fields."""

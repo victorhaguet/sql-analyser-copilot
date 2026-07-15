@@ -9,7 +9,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, Interrupt
 
-from nodes.database_selector import DatabaseSelectorNode
+from nodes.database_checker import DatabaseCheckerNode
 from nodes.intent_classifier import IntentClassifierNode
 from nodes.result_analyst import ResultAnalystNode
 from nodes.role_authorizer import RoleAuthorizerNode
@@ -18,14 +18,14 @@ from nodes.sql_generator import LLM, SQLGeneratorNode
 from nodes.sql_validator import SQLValidatorNode
 from nodes.sql_modification_validator import SQLModificationValidatorNode
 from state import SQLAgentState
-from tools.database import RegisteredDatabase, get_default_database_catalog
+from tools.database import SQLiteDatabase
 from tools.sql_safety import SQLSafetyValidator
 
 SQLAgentStateUpdate = SQLAgentState
 
 TraceStreamMode = Literal["updates", "values"]
 
-NODE_DATABASE_SELECTOR = "database_selector"
+NODE_DATABASE_CHECKER = "database_checker"
 NODE_INTENT_CLASSIFIER = "intent_classifier"
 NODE_ROLE_AUTHORIZER = "role_authorizer"
 NODE_SQL_GENERATOR = "sql_generator"
@@ -69,7 +69,7 @@ class SQLAgentTraceStep(TypedDict):
     outcome: str
 
 
-def _route_after_database_selection(state: SQLAgentState) -> str:
+def _route_after_database_check(state: SQLAgentState) -> str:
     return ROUTE_ABORT if state.get("execution_error") else NODE_INTENT_CLASSIFIER
 
 
@@ -81,10 +81,6 @@ def _route_after_executor(state: SQLAgentState) -> str:
     if state.get("execution_error"):
         return ROUTE_ABORT
     return NODE_RESULT_ANALYST
-
-
-def _route_from_database_selector(state: SQLAgentState) -> str:
-    return _route_after_database_selection(state)
 
 
 def _route_from_intent_classifier(state: SQLAgentState) -> str:
@@ -102,9 +98,6 @@ def _route_from_sql_validator(state: SQLAgentState) -> str:
         return ROUTE_ABORT
     return NODE_SQL_EXECUTOR
 
-
-def _route_from_sql_executor(state: SQLAgentState) -> str:
-    return _route_after_executor(state)
 
 
 def _route_from_modification_validator(state: SQLAgentState) -> str:
@@ -148,7 +141,7 @@ def _summarize_step_outcome(update: SQLAgentState) -> str:
     if "intent" in update:
         return "Intention classified"
     if "selected_database" in update:
-        return "database_selected"
+        return "database_checked"
     return "updated"
 
 
@@ -253,7 +246,7 @@ def build_sql_agent_graph(
     analyst_model: LLM | None = None,
     selector_model: LLM | None = None,
     intent_model: LLM | None = None,
-    databases: list[RegisteredDatabase] | None = None,
+    selected_database: SQLiteDatabase | None = None,
     validator: SQLSafetyValidator | None = None,
     execution_limit: int = 200,
     checkpointer: InMemorySaver | None = None,
@@ -265,29 +258,30 @@ def build_sql_agent_graph(
         analyst_model (LLM | None, optional): SQL analyser model. Defaults to None.
         selector_model (LLM | None, optional): Database selector model. Defaults to None.
         intent_model (LLM | None, optional): Intent classifier model. Defaults to sql_generator_model.
-        databases (list[RegisteredDatabase] | None, optional): Database catalog. Defaults to None.
+        selected_database (SQLiteDatabase): The selected database to query.
         validator (SQLSafetyValidator | None, optional): SQL safety validator. Defaults to None.
         execution_limit (int, optional): Maximum rows for query execution. Defaults to 200.
 
     Returns:
-        CompiledStateGraph: _description_
+        CompiledStateGraph: The compiled graph
     """
-    database_catalog = databases or get_default_database_catalog()
-    default_database = database_catalog[0].database
+    if selected_database is None:
+        raise ValueError("selected_database is required")
+    
     graph = StateGraph(SQLAgentState)
-    graph.add_node(NODE_DATABASE_SELECTOR, DatabaseSelectorNode(database_catalog, model=selector_model))
+    graph.add_node(NODE_DATABASE_CHECKER, DatabaseCheckerNode(database=selected_database, model=selector_model))
     graph.add_node(NODE_INTENT_CLASSIFIER, IntentClassifierNode(intent_model or sql_generator_model))
     graph.add_node(NODE_ROLE_AUTHORIZER, RoleAuthorizerNode())
-    graph.add_node(NODE_SQL_GENERATOR, SQLGeneratorNode(sql_generator_model, default_database, database_catalog))
-    graph.add_node(NODE_SQL_VALIDATOR, SQLValidatorNode(validator, database_catalog))
+    graph.add_node(NODE_SQL_GENERATOR, SQLGeneratorNode(sql_generator_model, selected_database))
+    graph.add_node(NODE_SQL_VALIDATOR, SQLValidatorNode(validator))
     graph.add_node(NODE_MODIFICATION_VALIDATOR, SQLModificationValidatorNode())
-    graph.add_node(NODE_SQL_EXECUTOR, SQLExecutorNode(default_database, database_catalog, limit=execution_limit))
+    graph.add_node(NODE_SQL_EXECUTOR, SQLExecutorNode(selected_database, limit=execution_limit))
     graph.add_node(NODE_RESULT_ANALYST, ResultAnalystNode(analyst_model))
 
-    graph.add_edge(START, NODE_DATABASE_SELECTOR)
+    graph.add_edge(START, NODE_DATABASE_CHECKER)
     graph.add_conditional_edges(
-        NODE_DATABASE_SELECTOR,
-        _route_from_database_selector,
+        NODE_DATABASE_CHECKER,
+        _route_after_database_check,
         {
             NODE_INTENT_CLASSIFIER: NODE_INTENT_CLASSIFIER,
             ROUTE_ABORT: END,

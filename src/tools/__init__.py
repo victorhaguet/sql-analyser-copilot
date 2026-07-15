@@ -8,7 +8,6 @@ from tools.database import (
     TableNotFoundError,
     format_database_schema,
     get_default_database,
-    get_default_database_catalog,
     load_database_catalog_from_env,
     register_database,
 )
@@ -46,7 +45,6 @@ __all__ = [
     "format_database_schema",
     "register_database",
     "get_default_database",
-    "get_default_database_catalog",
     "load_database_catalog_from_env",
     # SQL Safety
     "ValidatedSQL",

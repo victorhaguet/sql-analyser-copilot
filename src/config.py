@@ -79,7 +79,6 @@ def create_app_from_env():
         analyst_model=analyst_model,
         selector_model=sql_generator_model,
         intent_model=intent_model,
-        databases=None,
         enable_trace=enable_trace,
         trace_log_dir=trace_log_dir,
     )
@@ -90,7 +89,6 @@ def create_app(
     analyst_model=None,
     selector_model=None,
     intent_model=None,
-    databases=None,
     validator=None,
     execution_limit: int = 200,
     enable_trace: bool = False,
@@ -106,7 +104,6 @@ def create_app(
         analyst_model: The language model to use for result analysis (optional).
         selector_model: The language model to use for database selection (optional).
         intent_model: The language model to use for intent classification (optional).
-        databases: The registered databases available for routing (optional).
         validator: The SQLSafetyValidator instance to use for query validation (optional).
         execution_limit: The maximum number of rows to return from query execution (default: 200).
 
@@ -120,7 +117,6 @@ def create_app(
     fastapi_app.state.analyst_model = analyst_model
     fastapi_app.state.selector_model = selector_model
     fastapi_app.state.intent_model = intent_model
-    fastapi_app.state.databases = databases
     fastapi_app.state.validator = validator
     fastapi_app.state.execution_limit = execution_limit
     fastapi_app.state.enable_trace = enable_trace
