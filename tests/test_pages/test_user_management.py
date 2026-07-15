@@ -359,10 +359,12 @@ class RenderUserManagementTestCase(UserManagementTestCase):
     @patch("pages.user_management.require_admin")
     @patch("pages.user_management.st.title")
     @patch("pages.user_management.st.markdown")
-    @patch("pages.user_management.st.tabs", return_value=[MagicMock(), MagicMock()])
+    @patch("pages.user_management.st.tabs")
     @patch("pages.user_management.st.session_state", {"user": {"username": "admin"}})
+    @patch("pages.user_management._fetch_users")
     def test_renders_page_with_tabs(
         self,
+        _mock_fetch_users: MagicMock,
         _mock_tabs: MagicMock,
         _mock_markdown: MagicMock,
         _mock_title: MagicMock,
@@ -370,8 +372,17 @@ class RenderUserManagementTestCase(UserManagementTestCase):
         _mock_require_auth: MagicMock,
     ) -> None:
         """Test that render_user_management renders page with tabs."""
+        # Setup tabs to return context managers that don't execute content
+        mock_tab1 = MagicMock()
+        mock_tab1.__enter__ = MagicMock(return_value=mock_tab1)
+        mock_tab1.__exit__ = MagicMock(return_value=False)
+        mock_tab2 = MagicMock()
+        mock_tab2.__enter__ = MagicMock(return_value=mock_tab2)
+        mock_tab2.__exit__ = MagicMock(return_value=False)
+        _mock_tabs.return_value = [mock_tab1, mock_tab2]
+        
         render_user_management()
-
+        
         _mock_require_auth.assert_called()
         _mock_require_admin.assert_called()
         _mock_title.assert_called_once_with("User Management")
