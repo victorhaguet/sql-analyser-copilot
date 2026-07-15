@@ -5,7 +5,7 @@ LangGraph nodes for the SQL copilot agent workflow - database selection, intent 
 
 ## Key Files
 
-- **database_selector.py**: Selects most relevant database for user question
+- **database_checker.py**: Verify if the database correspond to the field of the user's question.
 - **intent_classifier.py**: Classifies user intent (query vs modification)
 - **role_authorizer.py**: Checks if user has authorization for modification operations
 - **sql_generator.py**: Generates SQL from natural language question
@@ -16,7 +16,7 @@ LangGraph nodes for the SQL copilot agent workflow - database selection, intent 
 
 ## Important Exports
 
-- DatabaseSelectorNode - Routes question to appropriate database
+- DatabaseCheckerNode - Check that the question correspond to the selected database
 - IntentClassifierNode - Classifies user intent
 - RoleAuthorizerNode - Authorizes modification operations
 - SQLGeneratorNode - Converts natural language to SQL
@@ -27,7 +27,7 @@ LangGraph nodes for the SQL copilot agent workflow - database selection, intent 
 
 ## Node Execution Flow
 
-1. **database_selector** → Routes question to database (or aborts on failure)
+1. **database_checker** → Verify that if the question correspond to the content of the database
 2. **intent_classifier** → Classifies request as query or modification
 3. **role_authorizer** → Checks user permissions (modifications only) or aborts
 4. **sql_generator** → Generates SQL from question + schema
@@ -58,7 +58,7 @@ This ensures users can review potentially destructive operations before they exe
 
 ## When to Read Files
 
-- **database_selector.py**: When modifying database routing logic
+- **database_checker.py**: When modifying database verification logic
 - **intent_classifier.py**: When changing intent classification prompt or behavior
 - **role_authorizer.py**: When updating authorization checks
 - **sql_generator.py**: When changing SQL generation prompt or behavior
