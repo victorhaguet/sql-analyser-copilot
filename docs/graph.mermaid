@@ -5,7 +5,7 @@ config:
 ---
 graph TD;
 	__start__([<p>__start__</p>]):::first
-	database_selector(database_selector)
+	database_checker(database_checker)
 	intent_classifier(intent_classifier)
 	role_authorizer(role_authorizer)
 	sql_generator(sql_generator)
@@ -14,9 +14,9 @@ graph TD;
 	sql_executor(sql_executor)
 	result_analyst(result_analyst)
 	__end__([<p>__end__</p>]):::last
-	__start__ --> database_selector;
-	database_selector -. &nbsp;abort&nbsp; .-> __end__;
-	database_selector -.-> intent_classifier;
+	__start__ --> database_checker;
+	database_checker -. &nbsp;abort&nbsp; .-> __end__;
+	database_checker -.-> intent_classifier;
 	intent_classifier -.-> role_authorizer;
 	intent_classifier -.-> sql_generator;
 	modification_validator -. &nbsp;abort&nbsp; .-> __end__;

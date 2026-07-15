@@ -10,7 +10,7 @@ The SQL Copilot uses a 9-node LangGraph workflow with conditional routing and in
 
 ### Nodes
 
-1. **Database Selector** - Routes questions to the most relevant database
+1. **Database Checker** - Validates if the user's question matches the configured database (e.g., if the question asks about artists and the database is about music, it's a fit; if it asks about World Cup winners but the database is about war, it isn't)
 2. **Intent Classifier** - Determines if user request is a query or modification
 3. **Role Authorizer** - Checks if user has permission for modification operations
 4. **SQL Generator** - Converts natural language to SQL using LLM
@@ -21,7 +21,7 @@ The SQL Copilot uses a 9-node LangGraph workflow with conditional routing and in
 
 ### Edge Routing
 
-- **database_selector** → intent_classifier (abort if database selection fails)
+- **database_checker** → intent_classifier (abort if query doesn't match database)
 - **intent_classifier** → role_authorizer (for modifications) or sql_generator (for queries)
 - **role_authorizer** → sql_generator (authorized) or abort (unauthorized)
 - **sql_generator** → sql_validator (queries) or modification_validator (modifications)
@@ -99,7 +99,7 @@ SQL_COPILOT_DATABASES='[
 ]'
 ```
 
-`SQL_COPILOT_DATABASES` lets the app route a question to the most relevant database before generating SQL. If none of the configured databases match the question, or if the question could match more than one configured database, the app returns an error asking the user to reformulate the request more specifically.
+`SQL_COPILOT_DATABASES` configures the database for the application. The database checker validates if the user's question matches the database content before generating SQL. If the question doesn't match (e.g., asking about sports in a music database), the app returns an error.
 
 Start the API:
 
