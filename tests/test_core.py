@@ -656,14 +656,14 @@ class CoreTestCase(unittest.TestCase):
         self.assertEqual(pending_sessions, {})
 
     def test_resume_question_raises_for_missing_thread(self) -> None:
-        """Unknown approval sessions should raise a clear error."""
+        """Resuming a missing thread should raise ValueError."""
         with self.assertRaises(ValueError) as context:
             resume_question(
-                "missing-thread",
+                "nonexistent_thread",
                 "approve",
                 pending_approval_sessions={},
             )
-        self.assertIn("No pending approval found for this thread", str(context.exception))
+        self.assertIn("No pending approval session found for this thread", str(context.exception))
 
     def test_resume_question_raises_for_wrong_user(self) -> None:
         """Approval sessions should be scoped to the initiating user."""

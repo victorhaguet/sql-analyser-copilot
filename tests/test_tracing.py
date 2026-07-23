@@ -294,6 +294,24 @@ class TracingTestCase(unittest.TestCase):
         
         self.assertIn("Connection failed", result)
 
+    def test_format_trace_step_fallback_includes_error_and_regenerated_sql(self) -> None:
+        """Fallback traces should show both the failure and replacement SQL."""
+        result = format_trace_step(
+            build_trace_step(
+                "sql_fallback_regenerator",
+                {
+                    "generated_sql": "SELECT Name FROM Artist",
+                    "retry_count": 1,
+                    "last_execution_error": "no such table: Artists",
+                    "regeneration_error": None,
+                },
+                outcome="sql_generated",
+            )
+        )
+
+        self.assertIn("Previous Error: no such table: Artists", result)
+        self.assertIn("Regenerated SQL:\nSELECT Name FROM Artist", result)
+
     def test_format_trace_step_analyst(self) -> None:
         """format_trace_step should format analyst node."""
         
