@@ -292,6 +292,7 @@ def confirm_query(
         result = resume_question(
             payload.thread_id,
             payload.decision,
+            edited_sql=payload.edited_sql,
             pending_approval_sessions=app.state.pending_approval_sessions,
             include_trace=app.state.enable_trace,
             trace_log_dir=app.state.trace_log_dir,

@@ -30,3 +30,10 @@ class SQLAgentState(TypedDict, total=False):
     execution_confirmed: bool # Whether user has confirmed execution
     thread_id: str # Thread identifier used to resume an interrupted graph
     interrupt: dict[str, Any] # Serialized LangGraph interrupt payload
+    edited_sql: str | None # User-modified SQL (if different from generated_sql)
+    retry_count: int # Current retry attempt number
+    max_retries: int # Maximum retry attempts allowed
+    last_execution_error: str | None # Last execution error message for fallback regeneration
+    regeneration_error: str | None # Error raised while attempting to regenerate SQL
+    previous_sql: str # SQL statement that failed before fallback regeneration
+    regeneration_explanation: str # User-facing reason for the regenerated statement

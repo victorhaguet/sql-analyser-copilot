@@ -30,6 +30,11 @@ class SQLModificationValidatorNode:
             "question": "Please verify that the following query correspond to the modification you want to apply. Every modification is definitive and can't be cancelled after your confirmation.",
             "request": state.get("question", ""),
             "draft": state.get("generated_sql", ""),
+            "previous_sql": state.get("previous_sql", ""),
+            "previous_error": state.get("last_execution_error"),
+            "regeneration_explanation": state.get("regeneration_explanation"),
+            "retry_count": state.get("retry_count", 0),
+            "max_retries": state.get("max_retries", 3),
             "options": ["approve", "reject"],
         })
 
