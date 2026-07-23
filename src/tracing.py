@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from uuid import uuid4
 
 from tools.database import QueryResult
@@ -164,6 +164,24 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
             f"{format_trace_header('Tool Message')}\n"
             f"Name: {node}\n\n"
             f"{body}"
+        )
+
+    if node == "sql_fallback_regenerator":
+        parts = [
+            f"Outcome: {step['outcome']}",
+            f"Retry Count: {update.get('retry_count', state.get('retry_count', 0))}",
+        ]
+        previous_error = update.get("last_execution_error") or state.get("last_execution_error")
+        if previous_error:
+            parts.append(f"Previous Error: {previous_error}")
+        if update.get("regeneration_error"):
+            parts.append(f"Error: {update['regeneration_error']}")
+        elif update.get("generated_sql"):
+            parts.extend(["Regenerated SQL:", str(update["generated_sql"])])
+        return (
+            f"{format_trace_header('fallback_regeneration')}\n"
+            f"Name: {node}\n\n"
+            f"{chr(10).join(parts)}"
         )
 
     if node == "sql_executor":
