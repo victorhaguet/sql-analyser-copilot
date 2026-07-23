@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-def build_empty_result_state() -> dict[str, object]:
+def build_empty_result_state() -> dict[str, Any]:
     """
     Return the default result state used by the UI.
     
@@ -27,6 +27,13 @@ def build_empty_result_state() -> dict[str, object]:
         "execution_confirmed": False,
         "thread_id": "",
         "interrupt": None,
+        "intent": None,
+        "retry_count": 0,
+        "max_retries": 3,
+        "last_execution_error": None,
+        "regeneration_error": None,
+        "previous_sql": "",
+        "regeneration_explanation": "",
     }
 
 
@@ -41,13 +48,25 @@ def build_display_context(response_data: dict[str, Any]) -> dict[str, Any]:
         A dictionary with values formatted for display in the UI.
     """
     # Get the SQL query to display
-    sql_query = (
-        response_data.get("validated_sql")
-        or response_data.get("generated_sql")
-        or response_data.get("sql_validation_error")
-        or response_data.get("execution_error")
-        or ""
-    )
+    # For modification queries, use generated_sql (contains the final executed SQL after user edits/regenerations)
+    # For query-type intents, use validated_sql (contains the safe SELECT statement)
+    intent = response_data.get("intent")
+    if intent == "modification":
+        sql_query = (
+            response_data.get("generated_sql")
+            or response_data.get("validated_sql")
+            or response_data.get("sql_validation_error")
+            or response_data.get("execution_error")
+            or ""
+        )
+    else:
+        sql_query = (
+            response_data.get("validated_sql")
+            or response_data.get("generated_sql")
+            or response_data.get("sql_validation_error")
+            or response_data.get("execution_error")
+            or ""
+        )
 
     # Get the AI summary
     ai_answer = (
@@ -70,9 +89,26 @@ def build_display_context(response_data: dict[str, Any]) -> dict[str, Any]:
         "execution_confirmed": bool(response_data.get("execution_confirmed")),
         "thread_id": response_data.get("thread_id") or "",
         "interrupt": response_data.get("interrupt"),
+        "intent": response_data.get("intent"),
+        "retry_count": response_data.get("retry_count", 0),
+        "max_retries": response_data.get("max_retries", 3),
+        "last_execution_error": response_data.get("last_execution_error"),
+        "regeneration_error": response_data.get("regeneration_error"),
+        "previous_sql": response_data.get("previous_sql") or "",
+        "regeneration_explanation": response_data.get("regeneration_explanation") or "",
+        "execution_error": response_data.get("execution_error"),
+        "sql_validation_error": response_data.get("sql_validation_error"),
         "has_error": bool(
-            response_data.get("execution_error") or response_data.get("sql_validation_error") or response_data.get("intent_error")
+            response_data.get("execution_error")
+            or response_data.get("sql_validation_error")
+            or response_data.get("intent_error")
+            or response_data.get("regeneration_error")
         ),
+        "error_message": response_data.get("regeneration_error")
+        or response_data.get("execution_error")
+        or response_data.get("sql_validation_error")
+        or response_data.get("intent_error")
+        or "",
     }
 
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+import sqlite3
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -13,8 +15,16 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
-from langgraph.types import Interrupt
-from graph import INTERRUPT_EVENT, _normalize_stream_event
+from langgraph.types import Command, Interrupt
+from graph import (
+    INTERRUPT_EVENT,
+    NODE_RESULT_ANALYST,
+    NODE_SQL_FALLBACK_REGENERATOR,
+    ROUTE_ABORT,
+    _normalize_stream_event,
+    _route_after_executor,
+    _route_from_fallback_regenerator,
+)
 from state import SQLAgentState
 from graph import _summarize_step_outcome
 from tools.database import SQLiteDatabase
@@ -196,6 +206,34 @@ class TestSummarizeStepOutcome(unittest.TestCase):
         self.assertEqual(result, "execution_pending_approval")
 
 
+class RetryRoutingTestCase(unittest.TestCase):
+    """Test retry boundaries and fallback failure routing."""
+
+    def test_execution_failure_routes_to_regenerator_below_retry_limit(self) -> None:
+        route = _route_after_executor(
+            {"execution_error": "failed", "retry_count": 2, "max_retries": 3}
+        )
+
+        self.assertEqual(route, NODE_SQL_FALLBACK_REGENERATOR)
+
+    def test_execution_failure_aborts_at_retry_limit(self) -> None:
+        route = _route_after_executor(
+            {"execution_error": "failed", "retry_count": 3, "max_retries": 3}
+        )
+
+        self.assertEqual(route, ROUTE_ABORT)
+
+    def test_successful_execution_routes_to_result_analysis(self) -> None:
+        self.assertEqual(_route_after_executor({"execution_error": None}), NODE_RESULT_ANALYST)
+
+    def test_regeneration_failure_aborts_without_reexecuting_failed_sql(self) -> None:
+        route = _route_from_fallback_regenerator(
+            {"regeneration_error": "model returned no SQL", "intent": "modification"}
+        )
+
+        self.assertEqual(route, ROUTE_ABORT)
+
+
 class FakeResponseTestCase(unittest.TestCase):
     """Test FakeResponse class."""
 
@@ -314,6 +352,21 @@ class FakeModel:
     def invoke(self, prompt: str) -> FakeResponse:
         del prompt
         return FakeResponse(self.response)
+
+
+class RepairingModel:
+    """Generate invalid initial SQL and repair it from fallback context."""
+
+    def __init__(self) -> None:
+        self.fallback_prompt = ""
+
+    def invoke(self, prompt: str) -> str:
+        if "authoritative repair target" in prompt:
+            self.fallback_prompt = prompt
+            if "'Suikon Blaz AD'" in prompt:
+                return "INSERT INTO Artist (Name) VALUES ('Suikon Blaz AD');"
+            return "INSERT INTO Artist (Name) VALUES ('Mandyspie');"
+        return "INSERT INTO Artists (Name) VALUES ('Mandyspie');"
 
 
 class FakeCompiledGraph:
@@ -460,6 +513,77 @@ class SQLGraphTestCase(unittest.TestCase):
         self.assertIn("query_result", result)
         self.assertIsNone(result.get("execution_error"))
         self.assertIsNotNone(result["query_result"])
+
+    def test_failed_modification_is_regenerated_and_requires_new_approval(self) -> None:
+        """A repaired modification must pause again before the corrected SQL executes."""
+        from graph import build_sql_agent_graph
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "retry.sqlite"
+            with sqlite3.connect(database_path) as connection:
+                connection.execute(
+                    "CREATE TABLE Artist (ArtistId INTEGER PRIMARY KEY, Name TEXT)"
+                )
+
+            model = RepairingModel()
+            graph = build_sql_agent_graph(
+                model,
+                selector_model=FakeModel(
+                    '{"match": true, "database": "music", "reason": "Matches question"}'
+                ),
+                intent_model=FakeModel('{"intent": "modification"}'),
+                selected_database=SQLiteDatabase(database_path),
+            )
+            config = build_thread_config()
+            initial_result = graph.invoke(
+                {
+                    "question": "Create the artist Mandyspie",
+                    "user_role": "admin",
+                    "retry_count": 0,
+                    "max_retries": 3,
+                },
+                config=config,
+            )
+            user_edited_sql = (
+                "INSERT INTO Artists (Name) VALUES ('Suikon Blaz AD');"
+            )
+            retry_result = graph.invoke(
+                Command(
+                    resume="approve",
+                    update={"generated_sql": user_edited_sql},
+                ),
+                config=config,
+            )
+
+            self.assertIn("__interrupt__", initial_result)
+            self.assertIn("__interrupt__", retry_result)
+            retry_payload = retry_result["__interrupt__"][0].value
+            self.assertEqual(
+                retry_payload["previous_sql"],
+                user_edited_sql,
+            )
+            self.assertIn("no such table: Artists", retry_payload["previous_error"])
+            self.assertIn(
+                "rewrote the statement",
+                retry_payload["regeneration_explanation"],
+            )
+            retry_state = graph.get_state(config).values
+            self.assertEqual(retry_state["retry_count"], 1)
+            self.assertEqual(
+                retry_state["generated_sql"],
+                "INSERT INTO Artist (Name) VALUES ('Suikon Blaz AD');",
+            )
+            self.assertIn("no such table: Artists", model.fallback_prompt)
+
+            graph.invoke(Command(resume="approve"), config=config)
+            final_state = graph.get_state(config).values
+
+            self.assertIsNone(final_state["execution_error"])
+            with sqlite3.connect(database_path) as connection:
+                artist_count = connection.execute(
+                    "SELECT COUNT(*) FROM Artist WHERE Name = 'Suikon Blaz AD'"
+                ).fetchone()[0]
+            self.assertEqual(artist_count, 1)
 
     def test_build_graph_stops_when_no_database_matches(self) -> None:
         """Questions outside the catalog should abort before SQL generation."""

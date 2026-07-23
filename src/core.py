@@ -30,10 +30,8 @@ class PendingApprovalSession:
 
 def _serialize_user(user: dict[str, Any]) -> dict[str, Any]:
     """Convert user dictionary to UserResponse-like dict.
-
     Args:
         user: User dictionary from database.
-
     Returns:
         Dictionary with user information suitable for API responses.
     """
@@ -115,6 +113,12 @@ def _serialize_state(state: SQLAgentState, question: str) -> dict[str, Any]:
         "interrupt": state.get("interrupt"),
         "analysis": state.get("analysis"),
         "metadata": state.get("metadata") or {},
+        "retry_count": state.get("retry_count", 0),
+        "max_retries": state.get("max_retries", 3),
+        "last_execution_error": state.get("last_execution_error"),
+        "regeneration_error": state.get("regeneration_error"),
+        "previous_sql": state.get("previous_sql"),
+        "regeneration_explanation": state.get("regeneration_explanation"),
     }
 
 
@@ -243,6 +247,9 @@ def start_question(
     initial_state: SQLAgentState = {
         "question": question,
         "user_role": user_role,
+        "retry_count": 0,
+        "max_retries": 3,
+        "last_execution_error": None,
     }
     if selected_database is not None:
         initial_state["selected_database"] = selected_database.name if hasattr(selected_database, 'name') else "default"
@@ -310,6 +317,7 @@ def resume_question(
     thread_id: str,
     decision: str,
     *,
+    edited_sql: str | None = None,
     pending_approval_sessions: dict[str, PendingApprovalSession],
     include_trace: bool = False,
     trace_log_dir: str | Path | None = None,
@@ -320,6 +328,7 @@ def resume_question(
     Args:
         thread_id (str): Memory ID of the graph
         decision (str): Decision of the user (approve or reject)
+        edited_sql (str | None): Optional SQL modified by the user
         pending_approval_sessions (dict[str, PendingApprovalSession]): Pending session
         include_trace (bool, optional): When true, attach a normalized per-step execution trace to `metadata["execution_trace"]`. Defaults to False.
         trace_log_dir (str | Path | None, optional): directory path where to save the log files. Defaults to None.
@@ -335,17 +344,22 @@ def resume_question(
 
     session = pending_approval_sessions.get(thread_id)
     if session is None:
-        raise ValueError("No pending approval found for this thread.")
+        raise ValueError("No pending approval session found for this thread.")
     if session.user_sub and session.user_sub != user_sub:
         raise ValueError("No pending approval found for this user.")
 
     config = _build_thread_config(thread_id)
 
+    if edited_sql and decision == "approve":
+        resume_command: Command = Command(resume=decision, update={"generated_sql": edited_sql})
+    else:
+        resume_command = Command(resume=decision)
+
     if include_trace:
         trace = list(
             stream_sql_agent_execution(
                 session.graph,
-                Command(resume=decision),
+                resume_command,
                 config=config,
             )
         )
@@ -375,7 +389,7 @@ def resume_question(
         )
         return result_state
 
-    result = session.graph.invoke(Command(resume=decision), config=config)
+    result = session.graph.invoke(resume_command, config=config)
     interrupt_payload = _extract_interrupt_payload(result)
     snapshot = session.graph.get_state(config)
     if interrupt_payload is not None:

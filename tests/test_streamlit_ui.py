@@ -102,6 +102,29 @@ class StreamlitUITestCase(unittest.TestCase):
         self.assertEqual(sql_query, "SELECT Name FROM Artist LIMIT 1")
         self.assertEqual(ai_answer, "No analysis returned.")
 
+    def test_build_display_context_keeps_retry_approval_state(self) -> None:
+        """The UI should retain retry metadata required by the approval dialog."""
+        context = build_display_context(
+            {
+                "intent": "modification",
+                "execution_requested": True,
+                "retry_count": 1,
+                "max_retries": 3,
+                "last_execution_error": "no such table: Artists",
+                "previous_sql": "SELECT * FROM Artists",
+                "regeneration_explanation": "Artists was replaced with Artist.",
+            }
+        )
+
+        self.assertEqual(context["intent"], "modification")
+        self.assertEqual(context["retry_count"], 1)
+        self.assertEqual(context["last_execution_error"], "no such table: Artists")
+        self.assertEqual(context["previous_sql"], "SELECT * FROM Artists")
+        self.assertEqual(
+            context["regeneration_explanation"],
+            "Artists was replaced with Artist.",
+        )
+
     def test_load_stylesheet_returns_content(self) -> None:
         """Test that the stylesheet is loaded and has content."""
         content = load_stylesheet()

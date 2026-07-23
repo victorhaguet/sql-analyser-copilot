@@ -17,6 +17,7 @@ from nodes.sql_executor import SQLExecutorNode
 from nodes.sql_generator import LLM, SQLGeneratorNode
 from nodes.sql_validator import SQLValidatorNode
 from nodes.sql_modification_validator import SQLModificationValidatorNode
+from nodes.sql_fallback_regenerator import SQLFallbackRegeneratorNode
 from state import SQLAgentState
 from tools.database import SQLiteDatabase
 from tools.sql_safety import SQLSafetyValidator
@@ -33,6 +34,7 @@ NODE_SQL_VALIDATOR = "sql_validator"
 NODE_SQL_EXECUTOR = "sql_executor"
 NODE_RESULT_ANALYST = "result_analyst"
 NODE_MODIFICATION_VALIDATOR = "modification_validator"
+NODE_SQL_FALLBACK_REGENERATOR = "sql_fallback_regenerator"
 ROUTE_ABORT = "abort"
 INTERRUPT_EVENT = "__interrupt__"
 
@@ -79,6 +81,10 @@ def _route_after_authorization(state: SQLAgentState) -> str:
 
 def _route_after_executor(state: SQLAgentState) -> str:
     if state.get("execution_error"):
+        retry_count = state.get("retry_count", 0)
+        max_retries = state.get("max_retries", 3)
+        if retry_count < max_retries:
+            return NODE_SQL_FALLBACK_REGENERATOR
         return ROUTE_ABORT
     return NODE_RESULT_ANALYST
 
@@ -106,6 +112,16 @@ def _route_from_modification_validator(state: SQLAgentState) -> str:
     return ROUTE_ABORT
 
 
+def _route_from_fallback_regenerator(state: SQLAgentState) -> str:
+    """Validate regenerated queries and re-approve regenerated modifications."""
+
+    if state.get("regeneration_error"):
+        return ROUTE_ABORT
+    if state.get("intent") == "modification":
+        return NODE_MODIFICATION_VALIDATOR
+    return NODE_SQL_VALIDATOR
+
+
 def _summarize_step_outcome(update: SQLAgentState) -> str:
     """Summarize the current state of the graph
 
@@ -120,6 +136,8 @@ def _summarize_step_outcome(update: SQLAgentState) -> str:
         return "authorization_failed"
     if update.get("interrupt"):
         return "execution_pending_approval"
+    if update.get("regeneration_error"):
+        return "regeneration_failed"
     if update.get("sql_validation_error"):
         return "validation_failed"
     if update.get("execution_error"):
@@ -275,6 +293,7 @@ def build_sql_agent_graph(
     graph.add_node(NODE_SQL_GENERATOR, SQLGeneratorNode(sql_generator_model, selected_database))
     graph.add_node(NODE_SQL_VALIDATOR, SQLValidatorNode(validator))
     graph.add_node(NODE_MODIFICATION_VALIDATOR, SQLModificationValidatorNode())
+    graph.add_node(NODE_SQL_FALLBACK_REGENERATOR, SQLFallbackRegeneratorNode(sql_generator_model))
     graph.add_node(NODE_SQL_EXECUTOR, SQLExecutorNode(selected_database, limit=execution_limit))
     graph.add_node(NODE_RESULT_ANALYST, ResultAnalystNode(analyst_model))
 
@@ -328,10 +347,20 @@ def build_sql_agent_graph(
         },
     )
     graph.add_conditional_edges(
+        NODE_SQL_FALLBACK_REGENERATOR,
+        _route_from_fallback_regenerator,
+        {
+            NODE_MODIFICATION_VALIDATOR: NODE_MODIFICATION_VALIDATOR,
+            NODE_SQL_VALIDATOR: NODE_SQL_VALIDATOR,
+            ROUTE_ABORT: END,
+        },
+    )
+    graph.add_conditional_edges(
         NODE_SQL_EXECUTOR,
         _route_after_executor,
         {
             NODE_RESULT_ANALYST: NODE_RESULT_ANALYST,
+            NODE_SQL_FALLBACK_REGENERATOR: NODE_SQL_FALLBACK_REGENERATOR,
             ROUTE_ABORT: END,
         },
     )

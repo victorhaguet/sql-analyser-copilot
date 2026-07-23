@@ -8,11 +8,12 @@ from state import SQLAgentState
 from tools.database import DatabaseError, SQLiteDatabase
 
 
-def _format_execution_error(error: DatabaseError) -> dict[str, Any]:
+def _format_execution_error(error: DatabaseError, state: SQLAgentState) -> dict[str, Any]:
     """Format execution error response.
 
     Args:
         error (DatabaseError): Content of the error
+        state (SQLAgentState): Current state to preserve retry count
 
     Returns:
         dict[str, Any]: Formatted error message
@@ -20,6 +21,8 @@ def _format_execution_error(error: DatabaseError) -> dict[str, Any]:
     return {
         "execution_error": str(error),
         "analysis": f"SQL execution failed: {error}",
+        "last_execution_error": str(error),
+        "retry_count": state.get("retry_count", 0),
     }
 
 def _execute_sql(
@@ -40,10 +43,12 @@ def _execute_sql(
     try:
         result = database.execute_command(_resolve_sql_query(state), limit=limit)
     except DatabaseError as exc:
-        return _format_execution_error(exc)
+        return _format_execution_error(exc, state)
     return {
         "query_result": result,
         "execution_error": None,
+        "last_execution_error": None,
+        "retry_count": state.get("retry_count", 0),
     }
 
 

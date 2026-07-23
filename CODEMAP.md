@@ -52,6 +52,7 @@ Individual processing nodes in the LangGraph workflow with conditional routing.
 | `sql_validator.py` | Validates SQL for safety (SELECT-only for queries) |
 | `sql_modification_validator.py` | Manages modification confirmation workflow |
 | `sql_executor.py` | Executes validated SQL queries against the database |
+| `sql_fallback_regenerator.py` | Repairs SQL after execution errors using the failed statement, database error, and schema |
 | `result_analyst.py` | Analyzes query results and generates insights |
 
 ### `tools/` - Utility Tools
@@ -145,8 +146,9 @@ The test directory mirrors the source structure:
 5. **SQL Generation** → `SQLGeneratorNode` (`nodes/sql_generator.py`)
 6. **SQL Validation** → `SQLValidatorNode` (`nodes/sql_validator.py`) for queries, or `SQLModificationValidatorNode` (`nodes/sql_modification_validator.py`) for modifications
 7. **Query Execution** → `SQLExecutorNode` (`nodes/sql_executor.py`)
-8. **Result Analysis** → `ResultAnalystNode` (`nodes/result_analyst.py`) for successful queries
-9. **Response** → Serialized state returned to client
+8. **Fallback Regeneration** → `SQLFallbackRegeneratorNode` (`nodes/sql_fallback_regenerator.py`) after execution errors, bounded to three retries
+9. **Result Analysis** → `ResultAnalystNode` (`nodes/result_analyst.py`) for successful queries
+10. **Response** → Serialized state returned to client
 
 ### Conditional Routing
 
@@ -158,5 +160,6 @@ The graph uses conditional edges to route execution based on state:
 - Authorization fails → abort
 - SQL is invalid → abort
 - Modification not confirmed → abort
-- Execution error → abort
+- Execution error below retry limit → regenerate → validate or re-approve → execute again
+- Execution error at retry limit, or regeneration failure → abort
 - Success → result_analyst → end

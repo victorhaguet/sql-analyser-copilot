@@ -23,6 +23,7 @@ class QueryResumeRequest(BaseModel):
 
     thread_id: str = Field(min_length=1)
     decision: Literal["approve", "reject"]
+    edited_sql: str | None = None  # Optional edited SQL from user
 
 
 class LoginRequest(BaseModel):
@@ -92,3 +93,9 @@ class QueryResponse(BaseModel):
     interrupt: dict[str, Any] | None = None
     analysis: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    retry_count: int = 0
+    max_retries: int = 3
+    last_execution_error: str | None = None
+    regeneration_error: str | None = None
+    previous_sql: str | None = None
+    regeneration_explanation: str | None = None

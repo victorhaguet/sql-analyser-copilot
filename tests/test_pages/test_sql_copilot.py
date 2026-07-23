@@ -27,6 +27,9 @@ from pages.sql_copilot import (
     _render_result_summary,
     _render_results,
     _render_approval_dialog,
+    _is_pending_approval,
+    _sql_editor_key,
+    _format_sql_diff,
     DEFAULT_QUESTION,
 )
 
@@ -323,6 +326,36 @@ class InitializeStateTestCase(SqlCopilotTestCase):
         """Test that _initialize_state sets selected database."""
         _initialize_state()
         self.assertIsNone(st.session_state["selected_database"])
+
+
+class PendingApprovalTestCase(SqlCopilotTestCase):
+    """Test approval state used across Streamlit reruns."""
+
+    def test_retry_interrupt_is_pending_approval(self) -> None:
+        result = _is_pending_approval(
+            {"execution_requested": True, "execution_confirmed": False}
+        )
+
+        self.assertTrue(result)
+
+    def test_interrupt_payload_is_enough_to_restore_pending_approval(self) -> None:
+        result = _is_pending_approval(
+            {"interrupt": {"draft": "UPDATE Artist SET Name = 'A'"}}
+        )
+
+        self.assertTrue(result)
+
+    def test_retry_uses_distinct_sql_editor_key(self) -> None:
+        self.assertEqual(_sql_editor_key("thread-1", 2), "edited_sql_thread-1_2")
+
+    def test_sql_diff_shows_failed_and_corrected_table_names(self) -> None:
+        result = _format_sql_diff(
+            "INSERT INTO Artists (Name) VALUES ('Mandyspie');",
+            "INSERT INTO Artist (Name) VALUES ('Mandyspie');",
+        )
+
+        self.assertIn("-INSERT INTO Artists", result)
+        self.assertIn("+INSERT INTO Artist", result)
 
 
 class RenderHeaderTestCase(SqlCopilotTestCase):
@@ -677,6 +710,40 @@ class RenderSqlCopilotPageTestCase(SqlCopilotTestCase):
 
         self.assertEqual(st.session_state["result_state"], latest_result)
         mock_render_results.assert_called_once_with(latest_result)
+
+    @patch("pages.sql_copilot._render_approval_dialog")
+    @patch("pages.sql_copilot._render_question_panel", return_value=False)
+    @patch("pages.sql_copilot._render_database_catalog", return_value="music")
+    @patch("pages.sql_copilot._render_header")
+    @patch("pages.sql_copilot.render_logout_button")
+    @patch("pages.sql_copilot.is_authenticated_page", return_value=True)
+    def test_pending_retry_always_opens_approval_dialog(
+        self,
+        _mock_is_authenticated: MagicMock,
+        _mock_render_logout_button: MagicMock,
+        _mock_render_header: MagicMock,
+        _mock_render_database_catalog: MagicMock,
+        _mock_render_question_panel: MagicMock,
+        mock_render_approval_dialog: MagicMock,
+    ) -> None:
+        retry_state = {
+            "question": "Create artist Jean Jass",
+            "execution_requested": True,
+            "execution_confirmed": False,
+            "thread_id": "thread-1",
+            "retry_count": 1,
+            "interrupt": {"draft": "INSERT INTO Artist VALUES ('Jean Jass')"},
+        }
+        st.session_state["result_state"] = retry_state
+        st.session_state["api_base_url"] = "http://localhost:8000"
+
+        with patch("pages.sql_copilot.st.warning"):
+            render_sql_copilot_page()
+
+        mock_render_approval_dialog.assert_called_once_with(
+            retry_state,
+            "http://localhost:8000",
+        )
 
 
 

@@ -12,6 +12,7 @@ LangGraph nodes for the SQL copilot agent workflow - database selection, intent 
 - **sql_validator.py**: Validates generated SQL for safety before execution
 - **sql_modification_validator.py**: Manages interruption/confirmation workflow for modifications
 - **sql_executor.py**: Executes validated SQL against SQLite database
+- **sql_fallback_regenerator.py**: Repairs SQL after execution errors with schema and failure context
 - **result_analyst.py**: Transforms query results into user-facing analysis
 
 ## Important Exports
@@ -23,6 +24,7 @@ LangGraph nodes for the SQL copilot agent workflow - database selection, intent 
 - SQLValidatorNode - Validates SQL safety
 - SQLModificationValidatorNode - Manages modification confirmation
 - SQLExecutorNode - Executes SQL queries
+- SQLFallbackRegeneratorNode - Regenerates failed SQL within the bounded retry loop
 - ResultAnalystNode - Analyzes query results
 
 ## Node Execution Flow
@@ -34,7 +36,8 @@ LangGraph nodes for the SQL copilot agent workflow - database selection, intent 
 5. **sql_validator** → Validates SQL for query (SELECT only, no forbidden keywords)
 6. **modification_validator** → **Interruption point**: pauses execution and waits for user confirmation before modifications
 7. **sql_executor** → Executes validated SQL with result limit
-8. **result_analyst** → Produces user-friendly analysis
+8. **sql_fallback_regenerator** → Repairs failed SQL, then returns it to validation or modification approval
+9. **result_analyst** → Produces user-friendly analysis
 
 ### Interruption Workflow
 
@@ -65,6 +68,7 @@ This ensures users can review potentially destructive operations before they exe
 - **sql_validator.py**: When updating SQL safety validation rules
 - **sql_modification_validator.py**: When modifying modification confirmation workflow
 - **sql_executor.py**: When adjusting query execution parameters
+- **sql_fallback_regenerator.py**: When changing retry behavior or execution-error repair
 - **result_analyst.py**: When changing result analysis or LLM usage
 
 ## Related Contexts

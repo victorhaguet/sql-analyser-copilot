@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from difflib import unified_diff
 from pathlib import Path
+from typing import cast
 
 import httpx
 import streamlit as st
@@ -83,7 +85,7 @@ def call_api(
         return error_state
 
     result_state = build_display_context(response_data)
-    
+
     return result_state
 
 
@@ -91,6 +93,7 @@ def call_confirmation_api(
     thread_id: str,
     decision: str,
     api_base_url: str,
+    edited_sql: str | None = None,
 ) -> dict[str, object]:
     """Resume a pending SQL modification after approval or rejection.
 
@@ -98,6 +101,7 @@ def call_confirmation_api(
         thread_id (str): memory identifier for the graph
         decision (str): Decision of the user
         api_base_url (str): Base URL of the fastAPI application
+        edited_sql (str | None): Optional edited SQL from user
 
     Returns:
         dict[str, object]: A directory with values formatted to display the UI
@@ -115,6 +119,7 @@ def call_confirmation_api(
             json={
                 "thread_id": thread_id,
                 "decision": decision,
+                "edited_sql": edited_sql,
             },
             headers=headers,
             timeout=120.0,
@@ -147,7 +152,60 @@ def _initialize_state() -> None:
     st.session_state.setdefault("question_input", DEFAULT_QUESTION)
     st.session_state.setdefault("result_state", build_empty_result_state())
     st.session_state.setdefault("selected_database", None)
-    st.session_state.setdefault("approval_dialog_open", False)
+
+
+def _is_pending_approval(result_state: dict[str, object]) -> bool:
+    """Return whether a graph run is waiting for modification approval.
+
+    Args:
+        result_state (dict[str, object]): State of the current graph
+
+    Returns:
+        bool: True if the graph is waiting for approval or not. 
+    """
+
+    return bool(
+        (result_state.get("execution_requested") or result_state.get("interrupt"))
+        and not result_state.get("execution_confirmed")
+    )
+
+
+def _sql_editor_key(thread_id: str, retry_count: int) -> str:
+    """Return a fresh widget key for each regenerated SQL draft.
+
+    Args:
+        thread_id (str): Id of the thread
+        retry_count (int): Number of the retry (max is 3)
+
+    Returns:
+        str: Widget key
+    """
+
+    return f"edited_sql_{thread_id}_{retry_count}"
+
+
+def _format_sql_diff(previous_sql: str, regenerated_sql: str) -> str:
+    """Format failed and regenerated SQL for syntax-highlighted display.
+
+    Args:
+        previous_sql (str): SQL query that failed
+        regenerated_sql (str): New SQL query (generated base on the failure of the previous one)
+
+    Returns:
+        str: Coding differences between the two SQL queries
+    """
+
+    if not previous_sql or previous_sql.strip() == regenerated_sql.strip():
+        return "No textual SQL changes were produced."
+    return "\n".join(
+        unified_diff(
+            previous_sql.splitlines(),
+            regenerated_sql.splitlines(),
+            fromfile="failed.sql",
+            tofile="corrected.sql",
+            lineterm="",
+        )
+    )
 
 
 def _sync_selected_database(databases: list[RegisteredDatabase]) -> str | None:
@@ -161,13 +219,13 @@ def _sync_selected_database(databases: list[RegisteredDatabase]) -> str | None:
     """
     available_names = [database.name for database in databases]
     current_selection = st.session_state.get("selected_database")
-    
+
     if current_selection is None or current_selection not in available_names:
         if available_names:
             st.session_state["selected_database"] = available_names[0]
             return available_names[0]
         return None
-    
+
     return current_selection
 
 
@@ -241,7 +299,7 @@ def _render_database_catalog() -> str | None:
         return selected_name
 
 
-def _render_question_panel() ->bool:
+def _render_question_panel() -> bool:
     """Render question panel
 
     Returns:
@@ -267,7 +325,7 @@ def _render_question_panel() ->bool:
         submit_columns = st.columns([1, 4])
 
         with submit_columns[0]:
-            submitted = st.form_submit_button("Run analysis", use_container_width=True)
+            submitted = st.form_submit_button("Run analysis", width="stretch")
 
     st.session_state["execution_limit"] = execution_limit
     return submitted
@@ -346,17 +404,27 @@ def _render_results(result_state: dict[str, object]) -> None:
     with data_tab:
         query_result = result_state.get("query_result")
         if isinstance(query_result, dict) and query_result.get("rows"):
-            st.dataframe(query_result["rows"], use_container_width=True, hide_index=True)
+            st.dataframe(query_result["rows"], width="stretch", hide_index=True)
         else:
             st.info("No result rows were returned for this run.")
 
 
-@st.dialog("Confirm SQL modification")
+@st.dialog(
+    "Review SQL modification",
+    width="large",
+    dismissible=False,
+    icon=":material/database:",
+)
 def _render_approval_dialog(
     result_state: dict[str, object],
     api_base_url: str,
 ) -> None:
-    """Render the approval popup for modification queries."""
+    """Render the approval popup for modification queries.
+
+    Args:
+        result_state (dict[str, object]): State of the generated SQL query
+        api_base_url (str): API to call
+    """
 
     interrupt_payload = result_state.get("interrupt")
     prompt_payload = interrupt_payload if isinstance(interrupt_payload, dict) else {}
@@ -365,39 +433,80 @@ def _render_approval_dialog(
         or "Please review the SQL statement before continuing."
     )
     sql_draft = str(prompt_payload.get("draft") or result_state.get("sql_query") or "")
+    thread_id = str(result_state.get("thread_id") or "")
+    retry_count = cast(int, result_state.get("retry_count") or 0)
+    max_retries = result_state.get("max_retries") or 3
+    previous_sql = str(
+        prompt_payload.get("previous_sql") or result_state.get("previous_sql") or ""
+    )
+    previous_error = str(
+        prompt_payload.get("previous_error")
+        or result_state.get("last_execution_error")
+        or ""
+    )
 
     st.write(message)
     if prompt_payload.get("request"):
         st.caption(f"Request: {prompt_payload['request']}")
-    st.code(sql_draft or "-- SQL will appear here", language="sql")
+    if retry_count:
+        st.info(
+            f"Fallback generated corrected SQL — attempt {retry_count} of {max_retries}.",
+            icon=":material/refresh:",
+        )
+        st.markdown("**Why it changed**")
+        st.write(
+            "The previous execution failed : "
+        )
+        if previous_error:
+            st.error(f"{previous_error}")
+        st.write(
+            "The fallback rewrote the statement using the supplied database schema. Review the highlighted changes before approving it."
+        )
+        if previous_sql:
+            with st.expander("See what changed", expanded=True):
+                st.code(
+                    _format_sql_diff(previous_sql, sql_draft),
+                    language="diff",
+                    wrap_lines=True,
+                )
 
-    approve_col, reject_col = st.columns([4.5 ,1.5])
-    with approve_col:
-        if st.button("Approve", use_container_width=True, key="approve_sql_modification"):
+    st.markdown("**SQL proposed for approval**")
+    st.code(sql_draft, language="sql", wrap_lines=True)
+
+    edited_sql = sql_draft
+    with st.expander("Edit proposed SQL", expanded=False):
+        edited_sql = st.text_area( # type: ignore[call-overload]
+            "SQL command",
+            value=sql_draft,
+            height=200,
+            key=_sql_editor_key(thread_id, retry_count),
+            label_visibility="collapsed",
+        )
+
+    with st.container(horizontal=True, horizontal_alignment="distribute"):
+        if st.button("Approve", width="content", key="approve_sql_modification"):
             with st.spinner("Executing approved SQL..."):
                 updated_state = call_confirmation_api(
-                    str(result_state.get("thread_id") or ""),
+                    thread_id,
                     "approve",
                     api_base_url,
+                    edited_sql=edited_sql if edited_sql != sql_draft else None,
                 )
             st.session_state["result_state"] = updated_state
-            st.session_state["approval_dialog_open"] = False
-            st.rerun()
-    with reject_col:
+            st.rerun(scope="app")
         if st.button(
-            "Reject", 
+            "Reject",
             key="reject_sql_modification",
-            width="stretch"
+            width="content",
         ):
             with st.spinner("Rejecting SQL..."):
                 updated_state = call_confirmation_api(
-                    str(result_state.get("thread_id") or ""),
+                    thread_id,
                     "reject",
                     api_base_url,
                 )
             st.session_state["result_state"] = updated_state
-            st.session_state["approval_dialog_open"] = False
-            st.rerun()
+            st.rerun(scope="app")
 
 
 def render_sql_copilot_page() -> None:
@@ -434,27 +543,16 @@ def render_sql_copilot_page() -> None:
                     selected_database=selected_database,
                 )
                 st.session_state["result_state"] = result_state
-            st.session_state["approval_dialog_open"] = bool(
-                result_state.get("execution_requested")
-                and not result_state.get("execution_confirmed")
-            )
-            result_state = st.session_state["result_state"]
+    result_state = st.session_state["result_state"]
 
     if result_state.get("authorization_error"):
         st.error(str(result_state.get("authorization_error")))
         return
 
-    pending_approval = bool(
-        result_state.get("execution_requested")
-        and not result_state.get("execution_confirmed")
-    )
+    pending_approval = _is_pending_approval(result_state)
 
     if pending_approval:
         st.warning("This SQL modification is waiting for your approval.")
-        if st.button("Review SQL command", key="review_sql_command_btn"):
-            st.session_state["approval_dialog_open"] = True
-
-    if pending_approval and st.session_state.get("approval_dialog_open"):
         _render_approval_dialog(result_state, api_base_url)
 
     has_result_content = any(
