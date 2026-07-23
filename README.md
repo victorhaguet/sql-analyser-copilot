@@ -4,7 +4,7 @@ A LangGraph-based SQL Copilot that translates natural language questions into SQ
 
 ## Architecture
 
-The SQL Copilot uses a 9-node LangGraph workflow with conditional routing and interruption support:
+The SQL Copilot uses a 10-node LangGraph workflow with conditional routing, interruption support, and automatic fallback recovery:
 
 ![Architecture](docs/graph.png)
 
@@ -18,6 +18,7 @@ The SQL Copilot uses a 9-node LangGraph workflow with conditional routing and in
 6. **Modification Validator** - Manages interruption/confirmation workflow for modifications
 7. **SQL Executor** - Runs the validated query against the database
 8. **Result Analyst** - Analyzes results and generates insights
+9. **SQL Fallback Regenerator** - Automatically regenerates SQL queries when execution fails (up to 3 retries)
 
 ### Edge Routing
 
@@ -27,7 +28,8 @@ The SQL Copilot uses a 9-node LangGraph workflow with conditional routing and in
 - **sql_generator** → sql_validator (queries) or modification_validator (modifications)
 - **sql_validator** → sql_executor (valid) or abort (invalid)
 - **modification_validator** → sql_executor (confirmed) or abort (cancelled)
-- **sql_executor** → result_analyst (success) or abort (error)
+- **sql_executor** → result_analyst (success), sql_fallback_regenerator (execution error with retries remaining), or abort (max retries exceeded)
+- **sql_fallback_regenerator** → sql_validator (for queries) or modification_validator (for modifications) to re-approve regenerated SQL, or abort (regeneration failed)
 - **result_analyst** → end
 
 ### Interruption Workflow

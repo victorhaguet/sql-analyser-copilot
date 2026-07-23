@@ -12,6 +12,7 @@ graph TD;
 	sql_validator(sql_validator)
 	modification_validator(modification_validator::interrupt)
 	sql_executor(sql_executor)
+	sql_fallback_regenerator(sql_fallback_regenerator)
 	result_analyst(result_analyst)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> database_checker;
@@ -24,7 +25,11 @@ graph TD;
 	role_authorizer -. &nbsp;abort&nbsp; .-> __end__;
 	role_authorizer -.-> sql_generator;
 	sql_executor -. &nbsp;abort&nbsp; .-> __end__;
+	sql_executor -. &nbsp;fallback&nbsp; .-> sql_fallback_regenerator;
 	sql_executor -.-> result_analyst;
+	sql_fallback_regenerator -. &nbsp;abort&nbsp; .-> __end__;
+	sql_fallback_regenerator -.-> modification_validator;
+	sql_fallback_regenerator -.-> sql_validator;
 	sql_generator -.-> modification_validator;
 	sql_generator -.-> sql_validator;
 	sql_validator -. &nbsp;abort&nbsp; .-> __end__;
@@ -34,4 +39,6 @@ graph TD;
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
 	classDef interrupt fill:#ffe0b2,stroke:#ff9800,stroke-width:2px,color:#000
+	classDef fallback fill:#b3e5fc,stroke:#03a9f4,stroke-width:2px,color:#000
 	class modification_validator interrupt
+	class sql_fallback_regenerator fallback
