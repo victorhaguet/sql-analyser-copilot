@@ -22,6 +22,11 @@ Core utility modules for database operations and SQL safety validation.
 
 - Read-only SQLite access with parameterization
 - Schema introspection (list tables, get schema, preview data)
+- Relational introspection: `get_foreign_keys`, `get_indexes`,
+  `list_referencing_tables` (incoming FKs), `format_table_detail` (columns with
+  NOT NULL/DEFAULT/PK, FKs in both directions, unique indexes, optional sample
+  rows), `format_full_schema` (every table via `format_table_detail`, with a
+  `max_chars` guard that falls back to `format_database_schema`)
 - SQL safety validation (SELECT only, no forbidden keywords)
 - Result limiting and truncation detection
 - Multiple database support with routing catalog
