@@ -8,7 +8,12 @@ Root folder for the SQL Copilot application - FastAPI backend and Streamlit UI e
 - **main.py**: FastAPI application with endpoints (/health, /auth/*, /query)
 - **core.py**: Core business logic - graph execution and state serialization
 - **graph.py**: LangGraph state machine definition (nodes, edges, routing)
-- **state.py**: SQLAgentState TypedDict for node communication
+- **state.py**: SQLAgentState TypedDict for node communication. Also carries the
+  SQL generation agent loop's `messages` transcript (the only reducer field,
+  `Annotated[list[AnyMessage], add_messages]` — appends instead of overwriting)
+  plus its budget/status keys (`agent_status`, `agent_iterations`, `probe_count`,
+  `clarification_rounds`, ...). Not yet wired into `graph.py` (Step 6 of
+  AGENTIC_SQL_GENERATION_PLAN.md).
 - **models.py**: Pydantic request/response models
 - **config.py**: Environment variable loading and FastAPI app wiring
 - **tracing.py**: Trace logging utilities and formatting
