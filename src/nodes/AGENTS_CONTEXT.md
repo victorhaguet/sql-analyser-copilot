@@ -14,6 +14,11 @@ LangGraph nodes for the SQL copilot agent workflow - database selection, intent 
 - **sql_executor.py**: Executes validated SQL against SQLite database
 - **sql_fallback_regenerator.py**: Repairs SQL after execution errors with schema and failure context
 - **result_analyst.py**: Transforms query results into user-facing analysis
+- **sql_agent.py**: The SQL generation agent loop — four nodes
+  (`SQLAgentLLMNode`, `SQLAgentToolsNode`, `SQLAgentClarifyNode`,
+  `SQLAgentFinalizeNode`) intended to replace `sql_generator.py` and, once the
+  graph is rewired (Step 6 of AGENTIC_SQL_GENERATION_PLAN.md), also
+  `sql_fallback_regenerator.py`. **Not yet wired into `graph.py`.**
 
 ## Important Exports
 
@@ -26,6 +31,11 @@ LangGraph nodes for the SQL copilot agent workflow - database selection, intent 
 - SQLExecutorNode - Executes SQL queries
 - SQLFallbackRegeneratorNode - Regenerates failed SQL within the bounded retry loop
 - ResultAnalystNode - Analyzes query results
+- SQLAgentLLMNode - Seeds/continues the agent transcript and calls the tool-calling model
+- SQLAgentToolsNode - Dispatches inspect_schema/run_readonly_probe tool calls; rejects
+  mixed-batch ask_user calls (D3) and enforces the probe budget
+- SQLAgentClarifyNode - Interrupts for user input when ask_user is the sole tool call
+- SQLAgentFinalizeNode - Extracts the final SQL + rationale, or resets state for a repair pass
 
 ## Node Execution Flow
 

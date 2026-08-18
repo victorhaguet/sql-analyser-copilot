@@ -12,6 +12,9 @@ Jinja2 prompt templates for SQL copilot nodes.
 - **sql_validator.j2**: Template for SQL safety validation node
 - **sql_fallback_regenerator.j2**: Template for repairing SQL after database execution errors
 - **result_analyst.j2**: Template for result analysis node
+- **sql_agent.j2**: System prompt seeding the SQL generation agent loop
+  (`nodes/sql_agent.py`) — states the three tools, the probe-before-finalize
+  rule (D6), and the INSERT/UPDATE/DELETE pre-conditions
 
 ## Key Features
 
@@ -29,6 +32,8 @@ Jinja2 prompt templates for SQL copilot nodes.
 - **sql_validator**: `question`, `sql`, `schema_overview`
 - **sql_fallback_regenerator**: `question`, `schema_overview`, `previous_sql`, `execution_error`
 - **result_analyst**: `question`, `sql`, `result_payload`
+- **sql_agent**: `intent`, `schema_overview`, `schema_truncated` (the question
+  itself is a separate seeded `HumanMessage`, not a template variable)
 
 ## When to Read Files
 
