@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
+
+from langchain_core.messages import AnyMessage
+from langgraph.graph import add_messages
 
 from tools.database import QueryResult
 
@@ -37,3 +40,17 @@ class SQLAgentState(TypedDict, total=False):
     regeneration_error: str | None # Error raised while attempting to regenerate SQL
     previous_sql: str # SQL statement that failed before fallback regeneration
     regeneration_explanation: str # User-facing reason for the regenerated statement
+
+    # SQL generation agent loop (messages is the transcript; everything else here
+    # is derived from or scoped alongside it — no parallel transcript is kept).
+    messages: Annotated[list[AnyMessage], add_messages] # Agent loop transcript (system/human/AI/tool messages)
+    agent_status: str | None # "final" | "needs_clarification" | "budget_exhausted" | "cancelled" | "failed"
+    agent_iterations: int # Number of sql_agent_llm turns taken so far
+    max_agent_iterations: int # Loop budget, intent-scoped
+    probe_count: int # Number of run_readonly_probe calls made so far
+    max_probes: int # Probe budget
+    clarification_rounds: int # Number of ask_user rounds taken so far
+    max_clarifications: int # Clarification budget
+    clarification_answers: list[dict[str, Any]] # Accumulated {key, question, answer}, appended never overwritten
+    agent_rationale: str # Short explanation of the final SQL, shown in the approval dialog
+    agent_error: str | None # Terminal agent failure message
