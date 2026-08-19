@@ -13,11 +13,14 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
+from langchain_core.messages import AIMessage, ToolMessage
+
 from tracing import (
     extract_trace_steps_from_content,
     format_trace_header,
     format_trace_payload,
     format_trace_step,
+    truncate_trace_lines,
     build_trace_log_content,
     write_trace_log,
     TRACE_LOG_DIR
@@ -82,6 +85,37 @@ class TracingTestCase(unittest.TestCase):
         self.assertIn("Columns: id, name", result)
         self.assertIn("Row Count: 1", result)
         self.assertIn("Truncated: False", result)
+
+    def test_truncate_trace_lines_leaves_short_text_untouched(self) -> None:
+        """Text at or under the line cap should pass through unchanged."""
+        text = "\n".join(f"line {i}" for i in range(10))
+        self.assertEqual(truncate_trace_lines(text), text)
+
+    def test_truncate_trace_lines_caps_long_text(self) -> None:
+        """Text over the line cap should be cut with a note of how much was removed."""
+        text = "\n".join(f"line {i}" for i in range(30))
+        result = truncate_trace_lines(text, max_lines=20)
+        self.assertEqual(len(result.splitlines()), 21)  # 20 kept + 1 truncation note
+        self.assertIn("[10 more line(s) truncated]", result)
+        self.assertIn("line 19", result)
+        self.assertNotIn("line 20", result)
+
+    def test_format_trace_step_sql_agent_llm_lists_multiple_tool_calls_in_order(self) -> None:
+        """A mixed-batch turn should list every requested tool call, in the order requested."""
+        message = AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "inspect_schema", "args": {"tables": ["Artist"]}, "id": "c1"},
+                {"name": "run_readonly_probe", "args": {"sql": "SELECT 1"}, "id": "c2"},
+            ],
+        )
+        result = format_trace_step(
+            build_trace_step("sql_agent_llm", {"messages": [message], "agent_iterations": 2})
+        )
+
+        schema_index = result.index("inspect_schema")
+        probe_index = result.index("run_readonly_probe")
+        self.assertLess(schema_index, probe_index)
 
     def test_format_trace_step_database_checker(self) -> None:
         """format_trace_step should format database_checker node."""
@@ -294,23 +328,200 @@ class TracingTestCase(unittest.TestCase):
         
         self.assertIn("Connection failed", result)
 
-    def test_format_trace_step_fallback_includes_error_and_regenerated_sql(self) -> None:
-        """Fallback traces should show both the failure and replacement SQL."""
+    def test_format_trace_step_sql_agent_llm_shows_iteration_and_tool_calls(self) -> None:
+        """sql_agent_llm traces should show the iteration number and requested tool calls."""
+        message = AIMessage(
+            content="",
+            tool_calls=[{"name": "inspect_schema", "args": {"tables": ["Artist"]}, "id": "c1"}],
+        )
         result = format_trace_step(
             build_trace_step(
-                "sql_fallback_regenerator",
-                {
-                    "generated_sql": "SELECT Name FROM Artist",
-                    "retry_count": 1,
-                    "last_execution_error": "no such table: Artists",
-                    "regeneration_error": None,
-                },
-                outcome="sql_generated",
+                "sql_agent_llm",
+                {"messages": [message], "agent_iterations": 2},
             )
         )
 
+        self.assertIn("Iteration: 2", result)
+        self.assertIn("Tool calls requested (1):", result)
+        self.assertIn("inspect_schema(tables=['Artist'])", result)
+
+    def test_format_trace_step_sql_agent_llm_shows_model_text_and_no_tool_calls(self) -> None:
+        """A finalize-ready turn (no tool calls) should be labeled distinctly, with model text shown."""
+        message = AIMessage(content="SELECT * FROM Artist", tool_calls=[])
+        result = format_trace_step(
+            build_trace_step(
+                "sql_agent_llm",
+                {"messages": [message], "agent_iterations": 3},
+            )
+        )
+
+        self.assertIn("Model text: SELECT * FROM Artist", result)
+        self.assertIn("Tool calls requested: (none - ready to finalize)", result)
+
+    def test_format_trace_step_sql_agent_tools_summarizes_each_result(self) -> None:
+        """sql_agent_tools traces should show one line per tool result, by name."""
+        tool_message = ToolMessage(
+            content="8 columns, 2 incoming FKs", name="inspect_schema", tool_call_id="c1"
+        )
+        result = format_trace_step(
+            build_trace_step("sql_agent_tools", {"messages": [tool_message], "probe_count": 0})
+        )
+
+        self.assertIn("- inspect_schema: 8 columns, 2 incoming FKs", result)
+
+    def test_format_trace_step_sql_agent_tools_truncates_long_probe_results(self) -> None:
+        """A probe result over ~20 lines should be truncated, not dumped in full."""
+        long_result = "25 row(s)\n" + "\n".join(f"row {i}" for i in range(24))
+        tool_message = ToolMessage(content=long_result, name="run_readonly_probe", tool_call_id="c1")
+        result = format_trace_step(
+            build_trace_step("sql_agent_tools", {"messages": [tool_message], "probe_count": 1})
+        )
+
+        self.assertIn("more line(s) truncated", result)
+        self.assertNotIn("row 23", result)
+
+    def test_format_trace_step_sql_agent_clarify_shows_answers(self) -> None:
+        """sql_agent_clarify traces should show the round number and the answers received."""
+        result = format_trace_step(
+            build_trace_step(
+                "sql_agent_clarify",
+                {
+                    "clarification_rounds": 1,
+                    "clarification_answers": [
+                        {"key": "metric", "question": "Which metric?", "answer": "total sales"}
+                    ],
+                },
+            )
+        )
+
+        self.assertIn("round 1", result)
+        self.assertIn("Which metric? -> total sales", result)
+
+    def test_format_trace_step_sql_agent_clarify_shows_cancellation(self) -> None:
+        """A cancelled clarification should be traced distinctly from an answered one."""
+        result = format_trace_step(
+            build_trace_step(
+                "sql_agent_clarify",
+                {"agent_status": "cancelled", "execution_error": "The user cancelled."},
+            )
+        )
+
+        self.assertIn("cancelled by user", result)
+        self.assertIn("The user cancelled.", result)
+
+    def test_format_trace_step_sql_agent_finalize_shows_sql_and_rationale(self) -> None:
+        """A successful finalize should show the final SQL and rationale."""
+        result = format_trace_step(
+            build_trace_step(
+                "sql_agent_finalize",
+                {
+                    "generated_sql": "SELECT * FROM Artist",
+                    "agent_status": "final",
+                    "agent_rationale": "Lists every artist.",
+                },
+            )
+        )
+
+        self.assertIn("Final SQL:\nSELECT * FROM Artist", result)
+        self.assertIn("Rationale: Lists every artist.", result)
+
+    def test_format_trace_step_sql_agent_finalize_carries_over_repair_info(self) -> None:
+        """A repair-pass finalize should carry the previous failure info (was sql_fallback_regenerator's job)."""
+        result = format_trace_step(
+            build_trace_step(
+                "sql_agent_finalize",
+                {
+                    "generated_sql": "SELECT Name FROM Artist",
+                    "previous_sql": "SELECT Name FROM Artists",
+                    "agent_status": "final",
+                    "agent_rationale": "Fixed the table name.",
+                },
+                state={
+                    "retry_count": 1,
+                    "max_retries": 3,
+                    "last_execution_error": "no such table: Artists",
+                },
+            )
+        )
+
+        self.assertIn("Repair attempt: 1 of 3", result)
         self.assertIn("Previous Error: no such table: Artists", result)
-        self.assertIn("Regenerated SQL:\nSELECT Name FROM Artist", result)
+        self.assertIn("Previous (failed) SQL:\nSELECT Name FROM Artists", result)
+        self.assertIn("Final SQL:\nSELECT Name FROM Artist", result)
+
+    def test_format_trace_step_sql_agent_finalize_failure(self) -> None:
+        """A finalize that failed to produce SQL should be traced clearly."""
+        result = format_trace_step(
+            build_trace_step(
+                "sql_agent_finalize",
+                {"agent_status": "failed", "agent_error": "no SQL statement returned"},
+            )
+        )
+
+        self.assertIn("failed to produce a valid SQL statement", result)
+        self.assertIn("no SQL statement returned", result)
+
+    def test_format_trace_step_sql_agent_budget_exhausted(self) -> None:
+        """The budget-exhausted node's explanation should appear verbatim in the trace."""
+        result = format_trace_step(
+            build_trace_step(
+                "sql_agent_budget_exhausted",
+                {
+                    "agent_status": "budget_exhausted",
+                    "analysis": "I found the Artist table but ran out of iterations.",
+                },
+            )
+        )
+
+        self.assertIn("iteration budget exhausted", result)
+        self.assertIn("I found the Artist table but ran out of iterations.", result)
+
+    def test_format_trace_step_interrupt_clarification_shows_questions(self) -> None:
+        """A clarification interrupt should show the actual questions asked."""
+        result = format_trace_step(
+            build_trace_step(
+                "__interrupt__",
+                {
+                    "interrupt": {
+                        "kind": "clarification",
+                        "questions": [
+                            {
+                                "key": "metric",
+                                "question": "Which metric?",
+                                "why": "Ambiguous request.",
+                                "suggested_default": "total sales",
+                            }
+                        ],
+                    }
+                },
+                outcome="awaiting_clarification",
+            )
+        )
+
+        self.assertIn("Questions asked (1):", result)
+        self.assertIn("[metric] Which metric?", result)
+        self.assertIn("why: Ambiguous request.", result)
+        self.assertIn("suggested default: total sales", result)
+
+    def test_format_trace_step_sql_executor_notes_repair_handoff(self) -> None:
+        """A failed execution routed back to the agent should say so in the trace."""
+        result = format_trace_step(
+            build_trace_step(
+                "sql_executor",
+                {
+                    "execution_error": "FOREIGN KEY constraint failed",
+                    "agent_status": "repairing",
+                    "retry_count": 1,
+                },
+                state={
+                    "intent": "modification",
+                    "generated_sql": "INSERT INTO Album (Title, ArtistId) VALUES ('X', 999)",
+                    "max_retries": 3,
+                },
+            )
+        )
+
+        self.assertIn("Handed back to the agent for repair (attempt 1 of 3).", result)
 
     def test_format_trace_step_analyst(self) -> None:
         """format_trace_step should format analyst node."""
