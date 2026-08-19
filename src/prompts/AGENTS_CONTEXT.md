@@ -10,11 +10,14 @@ Jinja2 prompt templates for SQL copilot nodes.
 - **role_authorizer.j2**: Template for role authorization node
 - **sql_generator.j2**: Template for SQL generation node
 - **sql_validator.j2**: Template for SQL safety validation node
-- **sql_fallback_regenerator.j2**: Template for repairing SQL after database execution errors
 - **result_analyst.j2**: Template for result analysis node
 - **sql_agent.j2**: System prompt seeding the SQL generation agent loop
   (`nodes/sql_agent.py`) — states the three tools, the probe-before-finalize
-  rule (D6), and the INSERT/UPDATE/DELETE pre-conditions
+  rule (D6), and the INSERT/UPDATE/DELETE pre-conditions. Also covers D6 repair
+  turns (the retired `sql_fallback_regenerator.j2`'s rules were folded in here).
+  Unlike every other node, this file has **no hardcoded fallback string** —
+  `SQLAgentLLMNode` raises if it is missing or empty rather than silently
+  degrading to a weaker built-in prompt.
 
 ## Key Features
 
@@ -30,7 +33,6 @@ Jinja2 prompt templates for SQL copilot nodes.
 - **role_authorizer**: `question`, `user_role`
 - **sql_generator**: `question`, `schema_overview`
 - **sql_validator**: `question`, `sql`, `schema_overview`
-- **sql_fallback_regenerator**: `question`, `schema_overview`, `previous_sql`, `execution_error`
 - **result_analyst**: `question`, `sql`, `result_payload`
 - **sql_agent**: `intent`, `schema_overview`, `schema_truncated` (the question
   itself is a separate seeded `HumanMessage`, not a template variable)
