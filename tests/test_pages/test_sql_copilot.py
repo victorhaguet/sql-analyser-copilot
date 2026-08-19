@@ -27,8 +27,11 @@ from pages.sql_copilot import (
     _render_result_summary,
     _render_results,
     _render_approval_dialog,
-    _is_pending_approval,
+    _render_clarification_dialog,
+    _render_agent_steps,
+    _pending_interrupt_kind,
     _sql_editor_key,
+    _clarification_answer_key,
     _format_sql_diff,
     DEFAULT_QUESTION,
 )
@@ -166,6 +169,30 @@ class CallConfirmationApiTestCase(SqlCopilotTestCase):
         headers = call_kwargs["headers"]
         self.assertEqual(headers["X-User-Sub"], "user-123")
         self.assertEqual(headers["X-User-Role"], "editor")
+
+    @patch("pages.sql_copilot.httpx.post")
+    def test_forwards_clarification_answers_in_request_body(self, mock_post: MagicMock) -> None:
+        """An 'answer' decision should send the answers list in the JSON body."""
+        mock_response = MagicMock()
+        mock_response.is_error = False
+        mock_response.json.return_value = {}
+        mock_post.return_value = mock_response
+
+        st.session_state["user"] = {"sub": "user-123", "role": "editor"}
+
+        call_confirmation_api(
+            thread_id="thread-456",
+            decision="answer",
+            api_base_url="http://localhost:8000",
+            answers=[{"key": "add_albums", "answer": "no"}],
+        )
+
+        call_kwargs = mock_post.call_args.kwargs
+        self.assertEqual(
+            call_kwargs["json"]["answers"],
+            [{"key": "add_albums", "answer": "no"}],
+        )
+        self.assertEqual(call_kwargs["json"]["decision"], "answer")
 
 
 class CallApiTestCase(SqlCopilotTestCase):
@@ -331,22 +358,54 @@ class InitializeStateTestCase(SqlCopilotTestCase):
 class PendingApprovalTestCase(SqlCopilotTestCase):
     """Test approval state used across Streamlit reruns."""
 
-    def test_retry_interrupt_is_pending_approval(self) -> None:
-        result = _is_pending_approval(
+    def test_retry_interrupt_is_pending_modification_approval(self) -> None:
+        result = _pending_interrupt_kind(
             {"execution_requested": True, "execution_confirmed": False}
         )
 
-        self.assertTrue(result)
+        self.assertEqual(result, "modification_approval")
 
-    def test_interrupt_payload_is_enough_to_restore_pending_approval(self) -> None:
-        result = _is_pending_approval(
+    def test_interrupt_payload_without_kind_defaults_to_modification_approval(self) -> None:
+        result = _pending_interrupt_kind(
             {"interrupt": {"draft": "UPDATE Artist SET Name = 'A'"}}
         )
 
-        self.assertTrue(result)
+        self.assertEqual(result, "modification_approval")
+
+    def test_interrupt_payload_reads_modification_approval_kind(self) -> None:
+        result = _pending_interrupt_kind(
+            {"interrupt": {"kind": "modification_approval", "draft": "UPDATE Artist SET Name = 'A'"}}
+        )
+
+        self.assertEqual(result, "modification_approval")
+
+    def test_interrupt_payload_reads_clarification_kind(self) -> None:
+        result = _pending_interrupt_kind(
+            {"interrupt": {"kind": "clarification", "questions": []}}
+        )
+
+        self.assertEqual(result, "clarification")
+
+    def test_confirmed_execution_has_no_pending_interrupt(self) -> None:
+        result = _pending_interrupt_kind(
+            {"interrupt": {"kind": "clarification"}, "execution_confirmed": True}
+        )
+
+        self.assertIsNone(result)
+
+    def test_no_interrupt_and_no_execution_requested_returns_none(self) -> None:
+        result = _pending_interrupt_kind({"question": "Top artists"})
+
+        self.assertIsNone(result)
 
     def test_retry_uses_distinct_sql_editor_key(self) -> None:
         self.assertEqual(_sql_editor_key("thread-1", 2), "edited_sql_thread-1_2")
+
+    def test_clarification_answer_key_includes_thread_round_and_question(self) -> None:
+        self.assertEqual(
+            _clarification_answer_key("thread-1", 2, "add_albums"),
+            "clarify_thread-1_2_add_albums",
+        )
 
     def test_sql_diff_shows_failed_and_corrected_table_names(self) -> None:
         result = _format_sql_diff(
@@ -549,11 +608,92 @@ class RenderResultSummaryTestCase(SqlCopilotTestCase):
         mock_info.assert_called_once()
 
 
+class RenderAgentStepsTestCase(SqlCopilotTestCase):
+    """Test _render_agent_steps function."""
+
+    @patch("pages.sql_copilot.st.columns", return_value=[MagicMock(), MagicMock()])
+    @patch("pages.sql_copilot.st.info")
+    def test_shows_info_when_no_tool_calls_recorded(
+        self,
+        mock_info: MagicMock,
+        _mock_columns: MagicMock,
+    ) -> None:
+        """No tool log should render an informational message, not an expander."""
+        _render_agent_steps({"agent_iterations": 0, "probe_count": 0, "agent_tool_log": []})
+
+        mock_info.assert_called_once()
+
+    @patch("pages.sql_copilot.st.columns", return_value=[MagicMock(), MagicMock()])
+    @patch("pages.sql_copilot.st.expander", side_effect=lambda *_a, **_k: nullcontext())
+    @patch("pages.sql_copilot.st.write")
+    @patch("pages.sql_copilot.st.json")
+    @patch("pages.sql_copilot.st.code")
+    def test_renders_one_expander_per_tool_call(
+        self,
+        mock_code: MagicMock,
+        mock_json: MagicMock,
+        _mock_write: MagicMock,
+        mock_expander: MagicMock,
+        _mock_columns: MagicMock,
+    ) -> None:
+        """Each tool log entry should render as its own expander with args and result."""
+        _render_agent_steps(
+            {
+                "agent_iterations": 2,
+                "probe_count": 1,
+                "agent_tool_log": [
+                    {
+                        "iteration": 1,
+                        "tool": "inspect_schema",
+                        "arguments": {"tables": ["Artist"]},
+                        "result": "8 columns, 2 incoming FKs",
+                    },
+                    {
+                        "iteration": 2,
+                        "tool": "run_readonly_probe",
+                        "arguments": {"sql": "SELECT 1"},
+                        "result": None,
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(mock_expander.call_count, 2)
+        mock_json.assert_any_call({"tables": ["Artist"]})
+        mock_code.assert_called_once()
+
+    @patch("pages.sql_copilot.st.columns", return_value=[MagicMock(), MagicMock()])
+    @patch("pages.sql_copilot.st.error")
+    @patch("pages.sql_copilot.st.info")
+    def test_shows_agent_error_when_present(
+        self,
+        mock_info: MagicMock,
+        mock_error: MagicMock,
+        _mock_columns: MagicMock,
+    ) -> None:
+        """A terminal agent_error should surface as an error banner."""
+        _render_agent_steps(
+            {
+                "agent_iterations": 4,
+                "probe_count": 4,
+                "agent_tool_log": [],
+                "agent_error": "The agent finished without returning a SQL statement.",
+            }
+        )
+
+        mock_error.assert_called_once_with("The agent finished without returning a SQL statement.")
+        mock_info.assert_called_once()
+
+
 class RenderResultsTestCase(SqlCopilotTestCase):
     """Test _render_results function."""
 
+    @patch("pages.sql_copilot._render_agent_steps")
     @patch("pages.sql_copilot._render_result_summary")
-    @patch("pages.sql_copilot.st.tabs", return_value=[MagicMock(), MagicMock(), MagicMock()])
+    @patch(
+        "pages.sql_copilot.st.tabs",
+        return_value=[MagicMock(), MagicMock(), MagicMock(), MagicMock()],
+    )
     @patch("pages.sql_copilot.st.write")
     @patch("pages.sql_copilot.st.code")
     @patch("pages.sql_copilot.st.dataframe")
@@ -564,6 +704,7 @@ class RenderResultsTestCase(SqlCopilotTestCase):
         _mock_write: MagicMock,
         _mock_tabs: MagicMock,
         _mock_summary: MagicMock,
+        _mock_agent_steps: MagicMock,
     ) -> None:
         """Test that _render_results renders successful result."""
         result_state = {
@@ -581,8 +722,12 @@ class RenderResultsTestCase(SqlCopilotTestCase):
 
         mock_dataframe.assert_called_once()
 
+    @patch("pages.sql_copilot._render_agent_steps")
     @patch("pages.sql_copilot._render_result_summary")
-    @patch("pages.sql_copilot.st.tabs", return_value=[MagicMock(), MagicMock(), MagicMock()])
+    @patch(
+        "pages.sql_copilot.st.tabs",
+        return_value=[MagicMock(), MagicMock(), MagicMock(), MagicMock()],
+    )
     @patch("pages.sql_copilot.st.error")
     @patch("pages.sql_copilot.st.code")
     def test_renders_error_result(
@@ -591,6 +736,7 @@ class RenderResultsTestCase(SqlCopilotTestCase):
         mock_error: MagicMock,
         _mock_tabs: MagicMock,
         _mock_summary: MagicMock,
+        _mock_agent_steps: MagicMock,
     ) -> None:
         """Test that _render_results renders error result."""
         result_state = {
@@ -605,8 +751,12 @@ class RenderResultsTestCase(SqlCopilotTestCase):
 
         mock_error.assert_called_once()
 
+    @patch("pages.sql_copilot._render_agent_steps")
     @patch("pages.sql_copilot._render_result_summary")
-    @patch("pages.sql_copilot.st.tabs", return_value=[MagicMock(), MagicMock(), MagicMock()])
+    @patch(
+        "pages.sql_copilot.st.tabs",
+        return_value=[MagicMock(), MagicMock(), MagicMock(), MagicMock()],
+    )
     @patch("pages.sql_copilot.st.warning")
     @patch("pages.sql_copilot.st.code")
     def test_renders_rejected_modification(
@@ -615,6 +765,7 @@ class RenderResultsTestCase(SqlCopilotTestCase):
         mock_warning: MagicMock,
         _mock_tabs: MagicMock,
         _mock_summary: MagicMock,
+        _mock_agent_steps: MagicMock,
     ) -> None:
         """Test that _render_results renders rejected modification."""
         result_state = {
@@ -745,7 +896,40 @@ class RenderSqlCopilotPageTestCase(SqlCopilotTestCase):
             "http://localhost:8000",
         )
 
+    @patch("pages.sql_copilot._render_clarification_dialog")
+    @patch("pages.sql_copilot._render_question_panel", return_value=False)
+    @patch("pages.sql_copilot._render_database_catalog", return_value="music")
+    @patch("pages.sql_copilot._render_header")
+    @patch("pages.sql_copilot.render_logout_button")
+    @patch("pages.sql_copilot.is_authenticated_page", return_value=True)
+    def test_pending_clarification_opens_clarification_dialog(
+        self,
+        _mock_is_authenticated: MagicMock,
+        _mock_render_logout_button: MagicMock,
+        _mock_render_header: MagicMock,
+        _mock_render_database_catalog: MagicMock,
+        _mock_render_question_panel: MagicMock,
+        mock_render_clarification_dialog: MagicMock,
+    ) -> None:
+        """A clarification interrupt should open the clarification dialog, not the approval one."""
+        clarify_state = {
+            "question": "Add a new artist called X",
+            "thread_id": "thread-1",
+            "interrupt": {
+                "kind": "clarification",
+                "questions": [{"key": "add_albums", "question": "Add albums too?"}],
+            },
+        }
+        st.session_state["result_state"] = clarify_state
+        st.session_state["api_base_url"] = "http://localhost:8000"
 
+        with patch("pages.sql_copilot.st.warning"):
+            render_sql_copilot_page()
+
+        mock_render_clarification_dialog.assert_called_once_with(
+            clarify_state,
+            "http://localhost:8000",
+        )
 
     @patch("pages.sql_copilot.st.error")
     @patch("pages.sql_copilot.st.container", side_effect=lambda **_: nullcontext())

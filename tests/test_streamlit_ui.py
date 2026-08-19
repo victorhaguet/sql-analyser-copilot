@@ -14,6 +14,7 @@ for parent in Path(__file__).resolve().parents:
 from streamlit_ui import (
     build_display_context,
     build_display_payload,
+    build_empty_result_state,
     load_stylesheet,
 )
 
@@ -124,6 +125,50 @@ class StreamlitUITestCase(unittest.TestCase):
             context["regeneration_explanation"],
             "Artists was replaced with Artist.",
         )
+
+    def test_build_display_context_keeps_agent_loop_fields(self) -> None:
+        """The UI context should carry the agent loop's status, budgets, and tool log."""
+        context = build_display_context(
+            {
+                "question": "add a new artist called X",
+                "messages": [{"role": "human", "content": "add a new artist called X"}],
+                "agent_status": "needs_clarification",
+                "agent_iterations": 2,
+                "max_agent_iterations": 8,
+                "probe_count": 1,
+                "max_probes": 6,
+                "clarification_rounds": 1,
+                "max_clarifications": 3,
+                "clarification_answers": [{"key": "add_albums", "question": "Add albums too?", "answer": "no"}],
+                "agent_rationale": "Only the Artist row is needed.",
+                "agent_error": None,
+                "agent_tool_log": [
+                    {"iteration": 1, "tool": "inspect_schema", "arguments": {"tables": ["Artist"]}, "result": "..."}
+                ],
+            }
+        )
+
+        self.assertEqual(context["agent_status"], "needs_clarification")
+        self.assertEqual(context["agent_iterations"], 2)
+        self.assertEqual(context["max_agent_iterations"], 8)
+        self.assertEqual(context["probe_count"], 1)
+        self.assertEqual(context["clarification_answers"][0]["key"], "add_albums")
+        self.assertEqual(context["agent_rationale"], "Only the Artist row is needed.")
+        self.assertEqual(len(context["agent_tool_log"]), 1)
+        self.assertEqual(context["messages"][0]["role"], "human")
+
+    def test_build_empty_result_state_defaults_agent_loop_fields(self) -> None:
+        """The empty state must default every agent-loop key the UI reads unconditionally."""
+        state = build_empty_result_state()
+
+        self.assertEqual(state["messages"], [])
+        self.assertIsNone(state["agent_status"])
+        self.assertEqual(state["agent_iterations"], 0)
+        self.assertEqual(state["probe_count"], 0)
+        self.assertEqual(state["clarification_answers"], [])
+        self.assertIsNone(state["agent_rationale"])
+        self.assertIsNone(state["agent_error"])
+        self.assertEqual(state["agent_tool_log"], [])
 
     def test_load_stylesheet_returns_content(self) -> None:
         """Test that the stylesheet is loaded and has content."""

@@ -15,6 +15,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from nodes.sql_agent import (
+    SQLAgentBudgetExhaustedNode,
     SQLAgentClarifyNode,
     SQLAgentFinalizeNode,
     SQLAgentLLMNode,
@@ -413,6 +414,53 @@ class SQLAgentClarifyNodeTestCase(unittest.TestCase):
 class SQLAgentFinalizeNodeTestCase(unittest.TestCase):
     """Test extraction of the final SQL statement (and repair-pass state resets)."""
 
+    def test_unescapes_literal_backslash_n_between_sql_clauses(self) -> None:
+        """A model that types literal backslash-n instead of real newlines should still parse."""
+        state = {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "SELECT a.Name AS ArtistName\\nFROM Artist a\\n"
+                        "JOIN Album al ON al.ArtistId = a.ArtistId\\n"
+                        "ORDER BY a.Name\\nLIMIT 1;"
+                    )
+                )
+            ]
+        }
+
+        result = SQLAgentFinalizeNode()(state)
+
+        self.assertEqual(
+            result["generated_sql"],
+            "SELECT a.Name AS ArtistName\n"
+            "FROM Artist a\n"
+            "JOIN Album al ON al.ArtistId = a.ArtistId\n"
+            "ORDER BY a.Name\n"
+            "LIMIT 1;",
+        )
+        self.assertNotIn("\\n", result["generated_sql"])
+
+    def test_unescapes_literal_backslash_n_before_rationale_marker(self) -> None:
+        """The rationale split must still work when the separator itself is a literal backslash-n."""
+        state = {
+            "messages": [
+                AIMessage(content="SELECT 1\\n\\nRationale: trivial query")
+            ]
+        }
+
+        result = SQLAgentFinalizeNode()(state)
+
+        self.assertEqual(result["generated_sql"], "SELECT 1")
+        self.assertEqual(result["agent_rationale"], "trivial query")
+
+    def test_real_newlines_are_left_untouched(self) -> None:
+        """A well-formed response with real newlines should be unaffected."""
+        state = {"messages": [AIMessage(content="SELECT 1\nFROM Artist\nLIMIT 1")]}
+
+        result = SQLAgentFinalizeNode()(state)
+
+        self.assertEqual(result["generated_sql"], "SELECT 1\nFROM Artist\nLIMIT 1")
+
     def test_extracts_sql_and_sets_final_status(self) -> None:
         """A plain SQL final answer should populate generated_sql and agent_status."""
         state = {"messages": [AIMessage(content="SELECT * FROM Artist")]}
@@ -483,6 +531,68 @@ class SQLAgentFinalizeNodeTestCase(unittest.TestCase):
         self.assertIsNone(result["sql_validation_error"])
         self.assertIsNone(result["execution_error"])
         self.assertFalse(result["execution_confirmed"])
+
+
+class SQLAgentBudgetExhaustedNodeTestCase(unittest.TestCase):
+    """Test the wrap-up node reached when the model still wants tools past the iteration cap."""
+
+    def test_asks_unbound_model_and_reports_terminal_status(self) -> None:
+        """The node should invoke the model unbound and surface a terminal explanation."""
+        model = ScriptedChatModel(
+            [
+                AIMessage(
+                    content=(
+                        "I found the Artist and Album tables and confirmed the artist exists, "
+                        "but could not settle on the right aggregation before running out of "
+                        "iterations. I reached my iteration limit and could not complete the request."
+                    )
+                )
+            ]
+        )
+        state = {
+            "messages": [
+                HumanMessage(content="question"),
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "run_readonly_probe", "args": {"sql": "SELECT 1"}, "id": "c1"}],
+                ),
+            ]
+        }
+
+        result = SQLAgentBudgetExhaustedNode(model)(state)
+
+        self.assertEqual(result["agent_status"], "budget_exhausted")
+        self.assertTrue(result["agent_error"])
+        self.assertIn("iteration limit", result["analysis"])
+        # bind_tools must never be called: the model must be physically unable to emit a tool call.
+        self.assertIsNone(model.bound_tools)
+
+    def test_appends_wrap_up_exchange_to_messages(self) -> None:
+        """The wrap-up request/response pair should be appended, not replace, the transcript."""
+        model = ScriptedChatModel([AIMessage(content="Here is what I found so far...")])
+        original_messages = [HumanMessage(content="question")]
+        state = {"messages": list(original_messages)}
+
+        result = SQLAgentBudgetExhaustedNode(model)(state)
+
+        self.assertEqual(len(result["messages"]), 2)
+        self.assertEqual(result["messages"][0].content, model.invocations[0][-1].content)
+        self.assertEqual(result["messages"][1].content, "Here is what I found so far...")
+
+    def test_invokes_model_with_full_transcript_plus_wrap_up_request(self) -> None:
+        """The model should see everything gathered so far, not just the wrap-up instruction."""
+        model = ScriptedChatModel([AIMessage(content="Summary.")])
+        transcript = [
+            HumanMessage(content="question"),
+            AIMessage(content="", tool_calls=[{"name": "inspect_schema", "args": {}, "id": "c1"}]),
+        ]
+        state = {"messages": list(transcript)}
+
+        SQLAgentBudgetExhaustedNode(model)(state)
+
+        sent_messages = model.invocations[0]
+        self.assertEqual(len(sent_messages), len(transcript) + 1)
+        self.assertEqual(sent_messages[: len(transcript)], transcript)
 
 
 class SQLAgentScenarioTestCase(unittest.TestCase):

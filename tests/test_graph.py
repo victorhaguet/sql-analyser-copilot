@@ -18,9 +18,12 @@ for parent in Path(__file__).resolve().parents:
 from langchain_core.messages import AIMessage
 from langgraph.types import Command, Interrupt
 from graph import (
+    DEFAULT_MAX_AGENT_ITERATIONS_MODIFICATION,
+    DEFAULT_MAX_AGENT_ITERATIONS_QUERY,
     INTERRUPT_EVENT,
     NODE_MODIFICATION_VALIDATOR,
     NODE_RESULT_ANALYST,
+    NODE_SQL_AGENT_BUDGET_EXHAUSTED,
     NODE_SQL_AGENT_CLARIFY,
     NODE_SQL_AGENT_FINALIZE,
     NODE_SQL_AGENT_LLM,
@@ -283,8 +286,16 @@ class TestSummarizeStepOutcome(unittest.TestCase):
     def test_summarize_agent_budget_exhausted(self) -> None:
         """Once agent_iterations reaches the intent-scoped cap, label it distinctly."""
         result = _summarize_step_outcome(
-            {"messages": [], "agent_iterations": 4},
-            {"agent_iterations": 4, "intent": "query"},
+            {"messages": [], "agent_iterations": DEFAULT_MAX_AGENT_ITERATIONS_QUERY},
+            {"agent_iterations": DEFAULT_MAX_AGENT_ITERATIONS_QUERY, "intent": "query"},
+        )
+        self.assertEqual(result, "agent_budget_exhausted")
+
+    def test_summarize_agent_budget_exhausted_node_output(self) -> None:
+        """SQLAgentBudgetExhaustedNode's own update (agent_status) must be labeled too,
+        independent of the agent_iterations heuristic above."""
+        result = _summarize_step_outcome(
+            {"agent_status": "budget_exhausted", "analysis": "I could not finish."}
         )
         self.assertEqual(result, "agent_budget_exhausted")
 
@@ -349,25 +360,35 @@ class RouteAfterAgentLLMTestCase(unittest.TestCase):
 
         self.assertEqual(route, NODE_SQL_AGENT_TOOLS)
 
-    def test_budget_exceeded_aborts_for_query_intent(self) -> None:
+    def test_budget_exceeded_routes_to_explanation_for_query_intent(self) -> None:
+        """A turn still requesting tools past the query cap explains itself instead of aborting silently."""
         message = AIMessage(
             content="", tool_calls=[{"name": "inspect_schema", "args": {}, "id": "c1"}]
         )
         route = _route_after_agent_llm(
-            {"messages": [message], "agent_iterations": 4, "intent": "query"}
+            {
+                "messages": [message],
+                "agent_iterations": DEFAULT_MAX_AGENT_ITERATIONS_QUERY,
+                "intent": "query",
+            }
         )
 
-        self.assertEqual(route, ROUTE_ABORT)
+        self.assertEqual(route, NODE_SQL_AGENT_BUDGET_EXHAUSTED)
 
-    def test_budget_exceeded_aborts_for_modification_intent(self) -> None:
+    def test_budget_exceeded_routes_to_explanation_for_modification_intent(self) -> None:
+        """Same budget enforcement, scoped to the modification intent's higher cap."""
         message = AIMessage(
             content="", tool_calls=[{"name": "inspect_schema", "args": {}, "id": "c1"}]
         )
         route = _route_after_agent_llm(
-            {"messages": [message], "agent_iterations": 8, "intent": "modification"}
+            {
+                "messages": [message],
+                "agent_iterations": DEFAULT_MAX_AGENT_ITERATIONS_MODIFICATION,
+                "intent": "modification",
+            }
         )
 
-        self.assertEqual(route, ROUTE_ABORT)
+        self.assertEqual(route, NODE_SQL_AGENT_BUDGET_EXHAUSTED)
 
     def test_explicit_budget_overrides_intent_scoped_default(self) -> None:
         message = AIMessage(
@@ -382,7 +403,20 @@ class RouteAfterAgentLLMTestCase(unittest.TestCase):
             }
         )
 
-        self.assertEqual(route, ROUTE_ABORT)
+        self.assertEqual(route, NODE_SQL_AGENT_BUDGET_EXHAUSTED)
+
+    def test_clean_finalize_on_last_allowed_iteration_is_not_aborted(self) -> None:
+        """A turn with no tool calls left must always reach finalize, even at/over the cap."""
+        message = AIMessage(content="SELECT 1", tool_calls=[])
+        route = _route_after_agent_llm(
+            {
+                "messages": [message],
+                "agent_iterations": DEFAULT_MAX_AGENT_ITERATIONS_QUERY,
+                "intent": "query",
+            }
+        )
+
+        self.assertEqual(route, NODE_SQL_AGENT_FINALIZE)
 
     def test_under_budget_does_not_abort(self) -> None:
         message = AIMessage(content="SELECT 1", tool_calls=[])
