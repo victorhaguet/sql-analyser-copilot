@@ -18,12 +18,25 @@ class QueryRequest(BaseModel):
     selected_database: str | None = None
 
 
+class ClarificationAnswer(BaseModel):
+    """A single answer to an agent-asked clarification question."""
+
+    key: str
+    answer: str
+
+
 class QueryResumeRequest(BaseModel):
-    """Incoming payload for resuming approval-gated SQL modifications."""
+    """Incoming payload for resuming an interrupted SQL copilot run.
+
+    Serves two interrupt kinds (see the `kind` field on `QueryResponse.interrupt`):
+    modification approval (`decision="approve"|"reject"`) and agent clarification
+    (`decision="answer"|"cancel"`, with `answers` populated for `"answer"`).
+    """
 
     thread_id: str = Field(min_length=1)
-    decision: Literal["approve", "reject"]
+    decision: Literal["approve", "reject", "answer", "cancel"]
     edited_sql: str | None = None  # Optional edited SQL from user
+    answers: list[ClarificationAnswer] | None = None  # Answers to an ask_user round
 
 
 class LoginRequest(BaseModel):
@@ -99,3 +112,15 @@ class QueryResponse(BaseModel):
     regeneration_error: str | None = None
     previous_sql: str | None = None
     regeneration_explanation: str | None = None
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    agent_status: str | None = None
+    agent_iterations: int = 0
+    max_agent_iterations: int | None = None
+    probe_count: int = 0
+    max_probes: int | None = None
+    clarification_rounds: int = 0
+    max_clarifications: int | None = None
+    clarification_answers: list[dict[str, Any]] = Field(default_factory=list)
+    agent_rationale: str | None = None
+    agent_error: str | None = None
+    agent_tool_log: list[dict[str, Any]] = Field(default_factory=list)

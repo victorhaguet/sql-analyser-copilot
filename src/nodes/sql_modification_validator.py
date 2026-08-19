@@ -27,6 +27,7 @@ class SQLModificationValidatorNode:
             A dictionary containing the approval result.
         """
         user_decision = interrupt({
+            "kind": "modification_approval",
             "question": "Please verify that the following query correspond to the modification you want to apply. Every modification is definitive and can't be cancelled after your confirmation.",
             "request": state.get("question", ""),
             "draft": state.get("generated_sql", ""),
