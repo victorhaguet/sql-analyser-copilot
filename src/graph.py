@@ -14,6 +14,7 @@ from nodes.intent_classifier import IntentClassifierNode
 from nodes.result_analyst import ResultAnalystNode
 from nodes.role_authorizer import RoleAuthorizerNode
 from nodes.sql_agent import (
+    SQLAgentBudgetExhaustedNode,
     SQLAgentClarifyNode,
     SQLAgentFinalizeNode,
     SQLAgentLLMNode,
@@ -39,6 +40,7 @@ NODE_SQL_AGENT_LLM = "sql_agent_llm"
 NODE_SQL_AGENT_TOOLS = "sql_agent_tools"
 NODE_SQL_AGENT_CLARIFY = "sql_agent_clarify"
 NODE_SQL_AGENT_FINALIZE = "sql_agent_finalize"
+NODE_SQL_AGENT_BUDGET_EXHAUSTED = "sql_agent_budget_exhausted"
 NODE_SQL_VALIDATOR = "sql_validator"
 NODE_SQL_EXECUTOR = "sql_executor"
 NODE_RESULT_ANALYST = "result_analyst"
@@ -48,9 +50,12 @@ INTERRUPT_EVENT = "__interrupt__"
 
 # Intent-scoped iteration budgets (D5). Placeholders; Step 10 of the agentic
 # SQL generation plan wires these to env vars (SQL_AGENT_MAX_ITERATIONS_QUERY /
-# SQL_AGENT_MAX_ITERATIONS_MODIFICATION).
-DEFAULT_MAX_AGENT_ITERATIONS_QUERY = 4
-DEFAULT_MAX_AGENT_ITERATIONS_MODIFICATION = 8
+# SQL_AGENT_MAX_ITERATIONS_MODIFICATION). Sized with headroom for a
+# clarification round (which itself consumes one llm-call iteration) plus a
+# couple of probe/correction cycles on either side of it, per the scenarios in
+# AGENTIC_SQL_GENERATION_PLAN.md.
+DEFAULT_MAX_AGENT_ITERATIONS_QUERY = 6
+DEFAULT_MAX_AGENT_ITERATIONS_MODIFICATION = 10
 
 
 class CompiledSQLAgentGraph(Protocol):
@@ -109,16 +114,23 @@ def _resolve_max_agent_iterations(state: SQLAgentState) -> int:
 
 
 def _route_after_agent_llm(state: SQLAgentState) -> str:
-    """should_continue, extended with budget enforcement and the clarify split (D3)."""
-    if state.get("agent_iterations", 0) >= _resolve_max_agent_iterations(state):
-        return ROUTE_ABORT
+    """should_continue, extended with budget enforcement and the clarify split (D3).
 
+    Tool calls are checked before the budget: a turn where the model is done
+    (no tool calls left) always reaches finalize, even if it lands exactly on
+    the last allowed iteration — the cap exists to stop the model from
+    continuing to probe/ask forever, not to punish a clean finish. The budget
+    only aborts a turn that still wants to call more tools past the cap, and
+    routes to a dedicated explanation node rather than ending silently.
+    """
     messages = state.get("messages") or []
     last_message = messages[-1] if messages else None
     tool_calls = getattr(last_message, "tool_calls", None) or []
 
     if not tool_calls:
         return NODE_SQL_AGENT_FINALIZE
+    if state.get("agent_iterations", 0) >= _resolve_max_agent_iterations(state):
+        return NODE_SQL_AGENT_BUDGET_EXHAUSTED
     if len(tool_calls) == 1 and tool_calls[0]["name"] == "ask_user":
         return NODE_SQL_AGENT_CLARIFY
     return NODE_SQL_AGENT_TOOLS
@@ -183,6 +195,8 @@ def _summarize_step_outcome(
         if isinstance(interrupt_payload, dict) and interrupt_payload.get("kind") == "clarification":
             return "awaiting_clarification"
         return "execution_pending_approval"
+    if update.get("agent_status") == "budget_exhausted":
+        return "agent_budget_exhausted"
     if update.get("agent_status") == "repairing":
         return "agent_repairing"
     if update.get("regeneration_error"):
@@ -381,6 +395,7 @@ def build_sql_agent_graph(
     graph.add_node(NODE_SQL_AGENT_TOOLS, SQLAgentToolsNode(agent_tools))
     graph.add_node(NODE_SQL_AGENT_CLARIFY, SQLAgentClarifyNode())
     graph.add_node(NODE_SQL_AGENT_FINALIZE, SQLAgentFinalizeNode())
+    graph.add_node(NODE_SQL_AGENT_BUDGET_EXHAUSTED, SQLAgentBudgetExhaustedNode(agent_model))
     graph.add_node(NODE_SQL_VALIDATOR, SQLValidatorNode(agent_validator))
     graph.add_node(NODE_MODIFICATION_VALIDATOR, SQLModificationValidatorNode())
     graph.add_node(NODE_SQL_EXECUTOR, SQLExecutorNode(selected_database, limit=execution_limit))
@@ -418,10 +433,11 @@ def build_sql_agent_graph(
             NODE_SQL_AGENT_FINALIZE: NODE_SQL_AGENT_FINALIZE,
             NODE_SQL_AGENT_CLARIFY: NODE_SQL_AGENT_CLARIFY,
             NODE_SQL_AGENT_TOOLS: NODE_SQL_AGENT_TOOLS,
-            ROUTE_ABORT: END,
+            NODE_SQL_AGENT_BUDGET_EXHAUSTED: NODE_SQL_AGENT_BUDGET_EXHAUSTED,
         },
     )
     graph.add_edge(NODE_SQL_AGENT_TOOLS, NODE_SQL_AGENT_LLM)
+    graph.add_edge(NODE_SQL_AGENT_BUDGET_EXHAUSTED, END)
     graph.add_conditional_edges(
         NODE_SQL_AGENT_CLARIFY,
         _route_after_clarify,
