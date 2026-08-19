@@ -9,11 +9,11 @@ from uuid import uuid4
 
 from langgraph.types import Command, Interrupt
 from graph import SQLAgentTraceStep, build_sql_agent_graph, stream_sql_agent_execution
-from nodes.sql_generator import LLM
 from state import SQLAgentState
 from tools.database import QueryResult, SQLiteDatabase
 from tools.sql_safety import SQLSafetyValidator
 from tracing import write_trace_log
+from utils.nodes import LLM, ToolCallingChatModel
 
 INTERRUPT_KEY = "__interrupt__"
 
@@ -219,6 +219,7 @@ def _attach_trace_metadata(
 def start_question(
     question: str,
     sql_generator_model: LLM,
+    agent_model: ToolCallingChatModel,
     analyst_model: LLM | None = None,
     selector_model: LLM | None = None,
     intent_model: LLM | None = None,
@@ -237,6 +238,7 @@ def start_question(
     config = _build_thread_config(thread_id)
     graph = build_sql_agent_graph(
         sql_generator_model=sql_generator_model,
+        agent_model=agent_model,
         analyst_model=analyst_model,
         selector_model=selector_model,
         intent_model=intent_model,
@@ -409,6 +411,7 @@ def resume_question(
 def answer_question(
     question: str,
     sql_generator_model: LLM,
+    agent_model: ToolCallingChatModel,
     analyst_model: LLM | None = None,
     selector_model: LLM | None = None,
     intent_model: LLM | None = None,
@@ -423,7 +426,8 @@ def answer_question(
 
     Args:
         question: The natural language question to answer.
-        sql_generator_model: The language model to use for SQL generation.
+        sql_generator_model: Default text model, used as the intent classifier's fallback.
+        agent_model: bind_tools-capable model driving the SQL generation agent loop.
         analyst_model: The language model to use for result analysis (optional).
         selector_model: The language model to use for database selection (optional).
         intent_model: The language model to use for intent classification (optional).
@@ -440,6 +444,7 @@ def answer_question(
     return start_question(
         question=question,
         sql_generator_model=sql_generator_model,
+        agent_model=agent_model,
         analyst_model=analyst_model,
         selector_model=selector_model,
         intent_model=intent_model,
@@ -456,6 +461,7 @@ def answer_question(
 def stream_question(
     question: str,
     sql_generator_model: LLM,
+    agent_model: ToolCallingChatModel,
     analyst_model: LLM | None = None,
     selector_model: LLM | None = None,
     intent_model: LLM | None = None,
@@ -471,7 +477,8 @@ def stream_question(
 
     Args:
         question: The natural language question to answer.
-        sql_generator_model: The language model to use for SQL generation.
+        sql_generator_model: Default text model, used as the intent classifier's fallback.
+        agent_model: bind_tools-capable model driving the SQL generation agent loop.
         analyst_model: The language model to use for result analysis (optional).
         selector_model: The language model to use for database selection (optional).
         intent_model: The language model to use for intent classification (optional).
@@ -485,6 +492,7 @@ def stream_question(
     """
     graph = build_sql_agent_graph(
         sql_generator_model=sql_generator_model,
+        agent_model=agent_model,
         analyst_model=analyst_model,
         selector_model=selector_model,
         intent_model=intent_model,

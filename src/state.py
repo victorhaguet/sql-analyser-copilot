@@ -44,7 +44,7 @@ class SQLAgentState(TypedDict, total=False):
     # SQL generation agent loop (messages is the transcript; everything else here
     # is derived from or scoped alongside it — no parallel transcript is kept).
     messages: Annotated[list[AnyMessage], add_messages] # Agent loop transcript (system/human/AI/tool messages)
-    agent_status: str | None # "final" | "needs_clarification" | "budget_exhausted" | "cancelled" | "failed"
+    agent_status: str | None # "final" | "needs_clarification" | "budget_exhausted" | "cancelled" | "failed" | "repairing"
     agent_iterations: int # Number of sql_agent_llm turns taken so far
     max_agent_iterations: int # Loop budget, intent-scoped
     probe_count: int # Number of run_readonly_probe calls made so far
