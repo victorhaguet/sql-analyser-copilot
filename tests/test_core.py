@@ -15,6 +15,7 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
+from langchain_core.messages import AIMessage
 from langgraph.types import Interrupt
 from tools.database import DatabaseError, SQLiteDatabase
 from core import (
@@ -51,6 +52,27 @@ class FakeModel:
     def invoke(self, prompt: str) -> FakeResponse:
         self.prompts.append(prompt)
         return FakeResponse(self.response)
+
+
+class ScriptedChatModel:
+    """Fake tool-calling chat model: bind_tools returns self, invoke pops a scripted reply."""
+
+    def __init__(self, responses: list[AIMessage]) -> None:
+        self._responses = list(responses)
+        self.bound_tools: list[object] | None = None
+        self.invocations: list[list[object]] = []
+
+    def bind_tools(self, tools: list[object]) -> "ScriptedChatModel":
+        """Record the bound tools and return self, like a real bind_tools call."""
+        self.bound_tools = list(tools)
+        return self
+
+    def invoke(self, messages: list[object]) -> AIMessage:
+        """Record the messages sent and pop the next scripted response."""
+        self.invocations.append(list(messages))
+        if not self._responses:
+            raise AssertionError("ScriptedChatModel ran out of scripted responses")
+        return self._responses.pop(0)
 
 
 class FakeCommand:
@@ -209,14 +231,16 @@ class CoreTestCase(unittest.TestCase):
         # Mock the selector model to always match
         selector_model = FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}')
         
-        generator_model = FakeModel(
-            "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
+        generator_model = FakeModel("unused")
+        agent_model = ScriptedChatModel(
+            [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId")]
         )
         analyst_model = FakeModel("The first two artists are AC/DC and Accept.")
         intent_model = FakeModel('{"intent": "query"}')
         result = answer_question(
             question="What are the first two artists?",
             sql_generator_model=generator_model,
+            agent_model=agent_model,
             analyst_model=analyst_model,
             selector_model=selector_model,
             intent_model=intent_model,
@@ -243,7 +267,8 @@ class CoreTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             result = answer_question(
                 question="Which 5 artists have the most albums ?",
-                sql_generator_model=FakeModel(sql_query),
+                sql_generator_model=FakeModel("unused"),
+                agent_model=ScriptedChatModel([AIMessage(content=sql_query)]),
                 analyst_model=FakeModel("Top artists returned."),
                 selector_model=selector_model,
                 intent_model=FakeModel('{"intent": "query"}'),
@@ -263,7 +288,8 @@ class CoreTestCase(unittest.TestCase):
 
         result = answer_question(
             question="What will the weather be tomorrow?",
-            sql_generator_model=FakeModel("SELECT Name FROM Artist"),
+            sql_generator_model=FakeModel("unused"),
+            agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
             selector_model=FakeModel(
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
             ),
@@ -278,7 +304,8 @@ class CoreTestCase(unittest.TestCase):
 
         result = answer_question(
             question="What will the weather be tomorrow?",
-            sql_generator_model=FakeModel("SELECT Name FROM Artist"),
+            sql_generator_model=FakeModel("unused"),
+            agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
             selector_model=FakeModel(
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "This question is unrelated to the configured database."}'
             ),
@@ -292,7 +319,8 @@ class CoreTestCase(unittest.TestCase):
         """Readonly users should be blocked before SQL generation on modifications."""
         result = answer_question(
             question="Delete all artists",
-            sql_generator_model=FakeModel("DELETE FROM Artist"),
+            sql_generator_model=FakeModel("unused"),
+            agent_model=ScriptedChatModel([AIMessage(content="DELETE FROM Artist")]),
             selector_model=FakeModel(
                 '{"match": true, "database": "music", "candidate_databases": [], "reason": "Match found"}'
             ),
@@ -309,8 +337,9 @@ class CoreTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             result = answer_question(
                 question="What are the first two artists?",
-                sql_generator_model=FakeModel(
-                    "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
+                sql_generator_model=FakeModel("unused"),
+                agent_model=ScriptedChatModel(
+                    [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId")]
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
                 selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
@@ -332,8 +361,9 @@ class CoreTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             result = answer_question(
                 question="What are the first two artists?",
-                sql_generator_model=FakeModel(
-                    "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
+                sql_generator_model=FakeModel("unused"),
+                agent_model=ScriptedChatModel(
+                    [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId")]
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
                 selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
@@ -358,8 +388,9 @@ class CoreTestCase(unittest.TestCase):
 
         result = answer_question(
             question="What are the first two artists?",
-            sql_generator_model=FakeModel(
-                "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
+            sql_generator_model=FakeModel("unused"),
+            agent_model=ScriptedChatModel(
+                [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId")]
             ),
             analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
             selected_database=SQLiteDatabase(),
@@ -374,7 +405,8 @@ class CoreTestCase(unittest.TestCase):
         steps = list(
             stream_question(
                 question="Delete all artists",
-                sql_generator_model=FakeModel("DELETE FROM Artist"),
+                sql_generator_model=FakeModel("unused"),
+                agent_model=ScriptedChatModel([AIMessage(content="DELETE FROM Artist")]),
                 selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
                 intent_model=FakeModel('{"intent": "modification"}'),
                 selected_database=SQLiteDatabase(),
@@ -393,7 +425,8 @@ class CoreTestCase(unittest.TestCase):
         steps = list(
             stream_question(
                 question="What will the weather be tomorrow?",
-                sql_generator_model=FakeModel("SELECT Name FROM Artist"),
+                sql_generator_model=FakeModel("unused"),
+                agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
                 selector_model=FakeModel(
                     '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
                 ),
@@ -408,8 +441,9 @@ class CoreTestCase(unittest.TestCase):
     def test_stream_question_exposes_execution_steps(self) -> None:
         """Streaming should expose each execution step with node name, update, and outcome."""
 
-        generator_model = FakeModel(
-            "SELECT Name FROM Artist WHERE ArtistId = 1"
+        generator_model = FakeModel("unused")
+        agent_model = ScriptedChatModel(
+            [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId = 1")]
         )
         analyst_model = FakeModel("The first artist is AC/DC.")
 
@@ -417,6 +451,7 @@ class CoreTestCase(unittest.TestCase):
             stream_question(
                 question="Who is the first artist?",
                 sql_generator_model=generator_model,
+                agent_model=agent_model,
                 analyst_model=analyst_model,
                 intent_model=FakeModel('{"intent": "query"}'),
                 selected_database=SQLiteDatabase(),
@@ -538,7 +573,10 @@ class CoreTestCase(unittest.TestCase):
         with patch("core.build_sql_agent_graph", return_value=fake_graph):
             result = start_question(
                 question="Delete artist 1",
-                sql_generator_model=FakeModel("DELETE FROM Artist WHERE ArtistId = 1"),
+                sql_generator_model=FakeModel("unused"),
+                agent_model=ScriptedChatModel(
+                    [AIMessage(content="DELETE FROM Artist WHERE ArtistId = 1")]
+                ),
                 user_role="admin",
                 user_sub="user-1",
                 pending_approval_sessions=pending_sessions,
