@@ -31,6 +31,30 @@ _RATIONALE_MARKER = re.compile(r"(?im)^[ \t]*rationale[ \t]*:[ \t]*")
 _LEADING_SQL_PATTERN = re.compile(r"(?i)^\s*(select|insert|update|delete|with)\b")
 
 
+def _unescape_literal_whitespace(text: str) -> str:
+    """Repair a model output artifact: literal backslash-n/backslash-t typed as
+    text instead of real whitespace.
+
+    Tool-call arguments go through structured JSON decoding, where `\\n`
+    always means a real newline. The model's *final plain-text* answer has no
+    such decoding step, and this model occasionally types the literal
+    two-character sequence `\\n` where it means a line break (seen consistently
+    in agent traces: a probe's tool-call SQL is fine, but the same query
+    retyped as the final answer has `\\n` for real). SQLite has no
+    backslash-escape syntax at all — a bare `\\` is always a syntax error, in
+    or out of a string literal — so this replacement is safe unconditionally,
+    with no risk of corrupting an intentional character in valid SQL.
+
+    Args:
+        text: The raw final-answer text, before SQL/rationale splitting.
+
+    Returns:
+        str: The same text with literal `\\r\\n` / `\\n` / `\\t` sequences
+        replaced by real whitespace.
+    """
+    return text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+
+
 def _last_ai_message(state: SQLAgentState) -> AIMessage:
     """Return the last message, narrowed to the AIMessage every caller expects.
 
@@ -282,6 +306,7 @@ class SQLAgentFinalizeNode:
         """
         messages = state.get("messages") or []
         raw_text = extract_text_from_response(messages[-1]) if messages else ""
+        raw_text = _unescape_literal_whitespace(raw_text)
 
         sql_part, rationale = _split_sql_and_rationale(raw_text)
         generated_sql = strip_code_fences(sql_part, language_prefix="sql")
@@ -310,6 +335,65 @@ class SQLAgentFinalizeNode:
             update["execution_confirmed"] = False
 
         return update
+
+
+class SQLAgentBudgetExhaustedNode:
+    """Explain what the agent learned when it runs out of iterations mid-task.
+
+    Reached only when the model still wants to call more tools past the
+    iteration cap — a clean finalize (no tool calls left) is never blocked by
+    the budget, see `_route_after_agent_llm` in graph.py. Rather than the run
+    silently dying with nothing to show, this asks the model to turn the
+    transcript gathered so far into a plain-language explanation.
+    """
+
+    _WRAP_UP_INSTRUCTION = (
+        "You have used all of your allowed iterations without producing a final "
+        "SQL statement. Do not call any tools - none are available anymore. "
+        "Write a short, plain-language explanation for the user covering: "
+        "(1) what you learned from the schema and the tool calls you already "
+        "made, (2) what specifically made this request hard to finish, and "
+        "(3) state clearly that you reached your iteration limit and could not "
+        "complete the request."
+    )
+
+    def __init__(self, model: ToolCallingChatModel) -> None:
+        """Initialize the SQLAgentBudgetExhaustedNode.
+
+        Args:
+            model: The same model driving the loop, invoked **unbound** (no
+                `bind_tools`) here so it is physically unable to emit another
+                tool call regardless of what the prompt says.
+        """
+        self.model = model
+
+    def __call__(self, state: SQLAgentState) -> dict[str, Any]:
+        """Ask the model to summarize its progress and explain the limit.
+
+        Args:
+            state: Current graph state; `messages` holds the full transcript
+                of schema, probes, and reasoning gathered so far.
+
+        Returns:
+            dict[str, Any]: The wrap-up exchange appended to `messages`,
+            `agent_status="budget_exhausted"`, a terminal `agent_error`, and
+            `analysis` — read directly as the user-facing answer, mirroring
+            how `intent_error`/`authorization_error` bypass `result_analyst`
+            since there is no `query_result` to analyze here.
+        """
+        transcript = list(state.get("messages") or [])
+        wrap_up_request = HumanMessage(content=self._WRAP_UP_INSTRUCTION)
+        response = self.model.invoke([*transcript, wrap_up_request])
+        explanation = extract_text_from_response(response)
+
+        return {
+            "messages": [wrap_up_request, response],
+            "agent_status": "budget_exhausted",
+            "agent_error": (
+                "The agent reached its iteration limit before producing a final SQL statement."
+            ),
+            "analysis": explanation,
+        }
 
 
 def _load_required_prompt(path: Path) -> str:
