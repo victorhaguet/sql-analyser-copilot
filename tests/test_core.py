@@ -121,6 +121,30 @@ class FakeApprovalGraph:
         return self.start_snapshot
 
 
+class SequentialFakeGraph:
+    """Graph double returning a scripted (result, snapshot) pair per invoke() call.
+
+    Unlike FakeApprovalGraph, phases are not inferred from the input (a single
+    "resume" phase cannot tell two different resumes apart); each invoke() call
+    simply advances to the next scripted step, which is what a multi-interrupt
+    round trip (clarify, then approve) needs.
+    """
+
+    def __init__(self, steps: list[tuple[object, SimpleNamespace]]) -> None:
+        self._steps = list(steps)
+        self._current_snapshot = self._steps[0][1] if self._steps else None
+
+    def invoke(self, state: object, config: dict[str, object] | None = None) -> object:
+        del state, config
+        result, snapshot = self._steps.pop(0)
+        self._current_snapshot = snapshot
+        return result
+
+    def get_state(self, config: dict[str, object]) -> SimpleNamespace:
+        del config
+        return self._current_snapshot
+
+
 class FakeCompiledGraph:
     """Small in-memory executor that mimics the compiled graph API."""
 
@@ -724,6 +748,158 @@ class CoreTestCase(unittest.TestCase):
                 user_sub="user-2",
             )
         self.assertIn("No pending approval found for this user", str(context.exception))
+
+    def test_resume_question_answer_decision_sends_dict_resume_payload(self) -> None:
+        """An 'answer' resume should send {decision, answers} as the resume payload."""
+        fake_graph = FakeApprovalGraph(
+            start_result={},
+            start_snapshot=SimpleNamespace(values={}, interrupts=[]),
+            resume_result={},
+            resume_snapshot=SimpleNamespace(
+                values={"question": "add a new artist called X", "agent_status": "final"},
+                interrupts=[],
+            ),
+        )
+        pending_sessions: dict[str, PendingApprovalSession] = {
+            "thread-1": PendingApprovalSession(
+                graph=fake_graph,
+                question="add a new artist called X",
+                user_sub="user-1",
+            )
+        }
+        captured: dict[str, object] = {}
+
+        def fake_command(*, resume: object, update: dict | None = None) -> SimpleNamespace:
+            captured["resume"] = resume
+            return SimpleNamespace(resume=resume, update=update)
+
+        with patch("core.Command", fake_command):
+            result = resume_question(
+                "thread-1",
+                "answer",
+                answers=[{"key": "add_albums", "answer": "yes"}],
+                pending_approval_sessions=pending_sessions,
+                user_sub="user-1",
+            )
+
+        self.assertEqual(
+            captured["resume"],
+            {"decision": "answer", "answers": [{"key": "add_albums", "answer": "yes"}]},
+        )
+        self.assertEqual(result["agent_status"], "final")
+
+    def test_resume_question_cancel_decision_sends_dict_resume_payload(self) -> None:
+        """A 'cancel' resume should send {decision: 'cancel', answers: []}, no answers required."""
+        fake_graph = FakeApprovalGraph(
+            start_result={},
+            start_snapshot=SimpleNamespace(values={}, interrupts=[]),
+            resume_result={},
+            resume_snapshot=SimpleNamespace(
+                values={"question": "add a new artist called X", "agent_status": "cancelled"},
+                interrupts=[],
+            ),
+        )
+        pending_sessions: dict[str, PendingApprovalSession] = {
+            "thread-1": PendingApprovalSession(
+                graph=fake_graph,
+                question="add a new artist called X",
+                user_sub="user-1",
+            )
+        }
+        captured: dict[str, object] = {}
+
+        def fake_command(*, resume: object, update: dict | None = None) -> SimpleNamespace:
+            captured["resume"] = resume
+            return SimpleNamespace(resume=resume, update=update)
+
+        with patch("core.Command", fake_command):
+            resume_question(
+                "thread-1",
+                "cancel",
+                pending_approval_sessions=pending_sessions,
+                user_sub="user-1",
+            )
+
+        self.assertEqual(captured["resume"], {"decision": "cancel", "answers": []})
+
+    def test_start_then_resume_handles_clarify_then_approve_two_interrupt_run(self) -> None:
+        """Full round trip: start pauses for clarification, answering pauses for
+        modification approval, and approving completes execution."""
+        clarify_interrupt = Interrupt(
+            {"kind": "clarification", "questions": [{"key": "add_albums", "question": "Add albums too?"}]}
+        )
+        approval_interrupt = Interrupt(
+            {"kind": "modification_approval", "draft": "INSERT INTO Artist (Name) VALUES ('X')"}
+        )
+
+        fake_graph = SequentialFakeGraph(
+            [
+                (
+                    {"__interrupt__": [clarify_interrupt]},
+                    SimpleNamespace(
+                        values={"question": "add a new artist called X", "intent": "modification"},
+                        interrupts=[clarify_interrupt],
+                    ),
+                ),
+                (
+                    {"__interrupt__": [approval_interrupt]},
+                    SimpleNamespace(
+                        values={"question": "add a new artist called X", "intent": "modification"},
+                        interrupts=[approval_interrupt],
+                    ),
+                ),
+                (
+                    {},
+                    SimpleNamespace(
+                        values={
+                            "question": "add a new artist called X",
+                            "intent": "modification",
+                            "execution_confirmed": True,
+                            "agent_status": "final",
+                        },
+                        interrupts=[],
+                    ),
+                ),
+            ]
+        )
+        pending_sessions: dict[str, PendingApprovalSession] = {}
+
+        with patch("core.build_sql_agent_graph", return_value=fake_graph):
+            started = start_question(
+                question="add a new artist called X",
+                sql_generator_model=FakeModel("unused"),
+                agent_model=ScriptedChatModel(
+                    [AIMessage(content="INSERT INTO Artist (Name) VALUES ('X')")]
+                ),
+                user_role="admin",
+                user_sub="user-1",
+                pending_approval_sessions=pending_sessions,
+            )
+
+        thread_id = started["thread_id"]
+        self.assertEqual(started["interrupt"]["kind"], "clarification")
+        self.assertIn(thread_id, pending_sessions)
+
+        with patch("core.Command", FakeResumeCommand):
+            after_answer = resume_question(
+                thread_id,
+                "answer",
+                answers=[{"key": "add_albums", "answer": "no"}],
+                pending_approval_sessions=pending_sessions,
+                user_sub="user-1",
+            )
+        self.assertEqual(after_answer["interrupt"]["kind"], "modification_approval")
+        self.assertIn(thread_id, pending_sessions)
+
+        with patch("core.Command", FakeResumeCommand):
+            after_approve = resume_question(
+                thread_id,
+                "approve",
+                pending_approval_sessions=pending_sessions,
+                user_sub="user-1",
+            )
+        self.assertTrue(after_approve["execution_confirmed"])
+        self.assertNotIn(thread_id, pending_sessions)
 
 
 class FakeResponseTestCase(unittest.TestCase):

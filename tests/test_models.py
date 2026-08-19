@@ -12,7 +12,9 @@ for parent in Path(__file__).resolve().parents:
         break
 
 from models import (
+    ClarificationAnswer,
     QueryRequest,
+    QueryResumeRequest,
     LoginRequest,
     UserCreate,
     UserUpdate,
@@ -144,6 +146,47 @@ class ModelsTestCase(unittest.TestCase):
         self.assertEqual(response.schema_overview, "Test schema")
         self.assertEqual(response.analysis, "Test analysis")
         self.assertEqual(response.metadata, {"key": "value"})
+
+    def test_query_response_defaults_agent_fields(self) -> None:
+        """QueryResponse should default the agent-loop fields when not supplied."""
+
+        response = QueryResponse(question="Test question")
+        self.assertEqual(response.messages, [])
+        self.assertIsNone(response.agent_status)
+        self.assertEqual(response.agent_iterations, 0)
+        self.assertEqual(response.clarification_answers, [])
+        self.assertEqual(response.agent_tool_log, [])
+
+    def test_clarification_answer_validation(self) -> None:
+        """ClarificationAnswer should require both key and answer."""
+
+        answer = ClarificationAnswer(key="add_albums", answer="no")
+        self.assertEqual(answer.key, "add_albums")
+        self.assertEqual(answer.answer, "no")
+
+    def test_query_resume_request_accepts_approve_decision(self) -> None:
+        """QueryResumeRequest should still accept the original approve/reject decisions."""
+
+        request = QueryResumeRequest(thread_id="thread-1", decision="approve")
+        self.assertEqual(request.decision, "approve")
+        self.assertIsNone(request.answers)
+
+    def test_query_resume_request_accepts_answer_decision_with_answers(self) -> None:
+        """QueryResumeRequest should accept a clarification 'answer' decision with answers."""
+
+        request = QueryResumeRequest(
+            thread_id="thread-1",
+            decision="answer",
+            answers=[ClarificationAnswer(key="add_albums", answer="yes")],
+        )
+        self.assertEqual(request.decision, "answer")
+        self.assertEqual(request.answers[0].key, "add_albums")
+
+    def test_query_resume_request_rejects_invalid_decision(self) -> None:
+        """QueryResumeRequest should reject decisions outside the known set."""
+
+        with self.assertRaises(ValueError):
+            QueryResumeRequest(thread_id="thread-1", decision="maybe")
 
 
 if __name__ == "__main__":
