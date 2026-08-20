@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Iterator, Literal, Protocol, TypedDict, cast
 from uuid import uuid4
 
@@ -48,14 +49,15 @@ NODE_MODIFICATION_VALIDATOR = "modification_validator"
 ROUTE_ABORT = "abort"
 INTERRUPT_EVENT = "__interrupt__"
 
-# Intent-scoped iteration budgets (D5). Placeholders; Step 10 of the agentic
-# SQL generation plan wires these to env vars (SQL_AGENT_MAX_ITERATIONS_QUERY /
-# SQL_AGENT_MAX_ITERATIONS_MODIFICATION). Sized with headroom for a
-# clarification round (which itself consumes one llm-call iteration) plus a
-# couple of probe/correction cycles on either side of it, per the scenarios in
+# Intent-scoped iteration budgets (D5), env-tunable via SQL_AGENT_MAX_ITERATIONS_QUERY /
+# SQL_AGENT_MAX_ITERATIONS_MODIFICATION. Sized with headroom for a clarification
+# round (which itself consumes one llm-call iteration) plus a couple of
+# probe/correction cycles on either side of it, per the scenarios in
 # AGENTIC_SQL_GENERATION_PLAN.md.
-DEFAULT_MAX_AGENT_ITERATIONS_QUERY = 6
-DEFAULT_MAX_AGENT_ITERATIONS_MODIFICATION = 10
+DEFAULT_MAX_AGENT_ITERATIONS_QUERY = int(os.getenv("SQL_AGENT_MAX_ITERATIONS_QUERY", "6"))
+DEFAULT_MAX_AGENT_ITERATIONS_MODIFICATION = int(
+    os.getenv("SQL_AGENT_MAX_ITERATIONS_MODIFICATION", "10")
+)
 
 
 class CompiledSQLAgentGraph(Protocol):

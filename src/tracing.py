@@ -186,6 +186,9 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
             lines.append("Outcome: clarification cancelled by user")
             if update.get("execution_error"):
                 lines.append(f"Reason: {update['execution_error']}")
+        elif "clarification_answers" not in update:
+            # Step 10 (D5): refused before interrupting, past the clarification cap.
+            lines.append("Outcome: clarification budget exhausted - told to proceed with assumptions")
         else:
             lines.append(
                 f"Outcome: answers received (round {update.get('clarification_rounds', '?')})"

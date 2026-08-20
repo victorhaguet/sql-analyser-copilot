@@ -8,11 +8,21 @@ these nodes only ever append to it, never overwrite it.
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolCall, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolCall,
+    ToolMessage,
+    trim_messages,
+)
 from langchain_core.tools import BaseTool
 from langgraph.types import interrupt
 
@@ -23,9 +33,15 @@ from utils.nodes import ToolCallingChatModel, render_prompt
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "sql_agent.j2"
 
-# Placeholders; Step 10 of the agentic SQL generation plan wires these to env vars.
-DEFAULT_MAX_PROBES = 6
-DEFAULT_MAX_CLARIFICATIONS = 3
+# Env-tunable guardrails (Step 10, D5).
+DEFAULT_MAX_PROBES = int(os.getenv("SQL_AGENT_MAX_PROBES", "6"))
+DEFAULT_MAX_CLARIFICATIONS = int(os.getenv("SQL_AGENT_MAX_CLARIFICATIONS", "3"))
+
+# Not an env var named in the plan: a generous ceiling on the transcript sent
+# to the model per call, well above what a maxed-out modification run (10
+# iterations + 3 clarification rounds) naturally produces, so it only ever
+# bites a genuinely pathological repair loop.
+MAX_CONTEXT_MESSAGES = 30
 
 _RATIONALE_MARKER = re.compile(r"(?im)^[ \t]*rationale[ \t]*:[ \t]*")
 _LEADING_SQL_PATTERN = re.compile(r"(?i)^\s*(select|insert|update|delete|with)\b")
@@ -53,6 +69,62 @@ def _unescape_literal_whitespace(text: str) -> str:
         replaced by real whitespace.
     """
     return text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+
+
+def _default_max_schema_chars() -> int | None:
+    """Read SQL_AGENT_MAX_SCHEMA_CHARS from env, or None (no truncation) if unset.
+
+    Returns:
+        int | None: The configured cap, or None to preserve today's default
+        of never truncating `format_full_schema`'s output.
+    """
+    raw = os.getenv("SQL_AGENT_MAX_SCHEMA_CHARS")
+    return int(raw) if raw else None
+
+
+def _trim_llm_context(messages: list[AnyMessage], max_messages: int = MAX_CONTEXT_MESSAGES) -> list[AnyMessage]:
+    """Cap the transcript sent to the model on this call, without touching persisted state.
+
+    Always keeps the first two messages (`SystemMessage`, the original-question
+    `HumanMessage` — see `SQLAgentLLMNode.__call__`'s seeding), then trims the
+    *oldest* tool exchanges from what follows once the transcript grows past
+    `max_messages`. Trimming only what is sent to `bound_model.invoke(...)`
+    keeps `state["messages"]` — and therefore the trace and the UI's "Agent
+    steps" tab — showing the full history regardless of this cap.
+
+    `trim_messages`'s own `start_on`/`include_system` options don't fit this
+    shape directly: this transcript typically has only one `HumanMessage` (the
+    seed), so anchoring the kept tail on "the most recent human message" would
+    usually keep nothing recent at all. Instead the head is sliced off
+    manually, and `trim_messages` is applied only to the tail, anchored on
+    `("human", "ai")` so it never keeps a `ToolMessage` with no preceding
+    `AIMessage` — which would be a malformed sequence the LLM API would reject.
+
+    Args:
+        messages: The full persisted transcript (`state["messages"]`).
+        max_messages: Total message budget, head included.
+
+    Returns:
+        list[AnyMessage]: `messages` unchanged if already within budget,
+        otherwise `[system, question, *trimmed tail]`.
+    """
+    if len(messages) <= max_messages:
+        return messages
+
+    head = messages[:2]
+    tail_budget = max(max_messages - len(head), 1)
+    trimmed_tail = cast(
+        "list[AnyMessage]",
+        trim_messages(
+            messages[2:],
+            strategy="last",
+            token_counter=len,
+            max_tokens=tail_budget,
+            include_system=False,
+            start_on=("human", "ai"),
+        ),
+    )
+    return [*head, *trimmed_tail]
 
 
 def _last_ai_message(state: SQLAgentState) -> AIMessage:
@@ -99,13 +171,16 @@ class SQLAgentLLMNode:
             tools: Tools the model may call (inspect_schema, ask_user, run_readonly_probe).
             database: Database used to seed the complete schema on first entry.
             prompt_template: Optional override of the rendered sql_agent.j2 system prompt.
-            max_schema_chars: Optional cap forwarded to format_full_schema (Step 1).
+            max_schema_chars: Cap forwarded to format_full_schema (Step 1). Defaults
+                to SQL_AGENT_MAX_SCHEMA_CHARS from env, or None (no truncation).
         """
         self.model = model
         self.bound_model = model.bind_tools(list(tools))
         self.database = database
         self.prompt_template = prompt_template or _load_required_prompt(PROMPT_PATH)
-        self.max_schema_chars = max_schema_chars
+        self.max_schema_chars = (
+            max_schema_chars if max_schema_chars is not None else _default_max_schema_chars()
+        )
 
     def __call__(self, state: SQLAgentState) -> dict[str, Any]:
         """Seed the transcript on first entry, else continue it, then call the model.
@@ -143,11 +218,58 @@ class SQLAgentLLMNode:
                 "agent_iterations": state.get("agent_iterations", 0) + 1,
             }
 
-        response = self.bound_model.invoke(existing_messages)
+        llm_context = _trim_llm_context(existing_messages)
+        response = self.bound_model.invoke(llm_context)
         return {
             "messages": [response],
             "agent_iterations": state.get("agent_iterations", 0) + 1,
         }
+
+
+def _tool_call_key(name: str, args: dict[str, Any]) -> tuple[str, str]:
+    """Build a stable, hashable key identifying a tool call by name + arguments.
+
+    Args:
+        name: The tool name.
+        args: The tool call's arguments.
+
+    Returns:
+        tuple[str, str]: `(name, json-serialized args)`, safe to use as a dict key.
+    """
+    return (name, json.dumps(args, sort_keys=True, default=str))
+
+
+def _index_previous_tool_results(messages: list[AnyMessage]) -> dict[tuple[str, str], str]:
+    """Map every already-executed (name, args) tool call to its prior result.
+
+    Used to deduplicate a repeated identical call (the single most common
+    agent failure loop, per the plan): a stuck model re-issuing the same probe
+    or schema inspection instead of finalizing.
+
+    Args:
+        messages: The transcript so far (`state["messages"]`, before this turn's batch).
+
+    Returns:
+        dict[tuple[str, str], str]: `_tool_call_key(...) -> result content`,
+        for every tool call that already produced a `ToolMessage`.
+    """
+    call_key_by_id: dict[str, tuple[str, str]] = {}
+    for message in messages:
+        if isinstance(message, AIMessage):
+            for tool_call in message.tool_calls:
+                call_id = tool_call.get("id")
+                if call_id is not None:
+                    call_key_by_id[call_id] = _tool_call_key(
+                        tool_call["name"], tool_call.get("args") or {}
+                    )
+
+    results: dict[tuple[str, str], str] = {}
+    for message in messages:
+        if isinstance(message, ToolMessage):
+            key = call_key_by_id.get(message.tool_call_id)
+            if key is not None:
+                results[key] = str(message.content)
+    return results
 
 
 class SQLAgentToolsNode:
@@ -183,6 +305,7 @@ class SQLAgentToolsNode:
         last_message = _last_ai_message(state)
         probe_count = state.get("probe_count", 0)
         max_probes = state.get("max_probes", self.default_max_probes)
+        previous_results = _index_previous_tool_results(state.get("messages") or [])
 
         tool_messages: list[ToolMessage] = []
         for tool_call in last_message.tool_calls:
@@ -195,6 +318,20 @@ class SQLAgentToolsNode:
                         content=(
                             "ask_user must be called alone, with no other tool calls in "
                             "the same turn. Retry with only ask_user."
+                        ),
+                        tool_call_id=call_id,
+                        name=name,
+                    )
+                )
+                continue
+
+            args_key = _tool_call_key(name, tool_call.get("args") or {})
+            if args_key in previous_results:
+                tool_messages.append(
+                    ToolMessage(
+                        content=(
+                            "Identical call already made, see the previous result: "
+                            f"{previous_results[args_key]}"
                         ),
                         tool_call_id=call_id,
                         name=name,
@@ -231,6 +368,9 @@ class SQLAgentToolsNode:
                 result = f"Tool {name} failed: {exc}"
 
             tool_messages.append(ToolMessage(content=str(result), tool_call_id=call_id, name=name))
+            # Remember this result too, so an identical repeat later *in this same
+            # batch* is caught, not just repeats across turns.
+            previous_results[args_key] = str(result)
 
         return {"messages": tool_messages, "probe_count": probe_count}
 
@@ -244,8 +384,21 @@ class SQLAgentClarifyNode:
     resume value instead of raising.
     """
 
+    def __init__(self, max_clarifications: int = DEFAULT_MAX_CLARIFICATIONS) -> None:
+        """Initialize the SQLAgentClarifyNode.
+
+        Args:
+            max_clarifications: Default clarification-round budget, used when
+                the state has none set.
+        """
+        self.default_max_clarifications = max_clarifications
+
     def __call__(self, state: SQLAgentState) -> dict[str, Any]:
         """Pause for user input, then fold the answers back into the transcript.
+
+        Refuses past the clarification budget (Step 10) *before* calling
+        `interrupt()`: no pause is ever raised for a refused round, so this
+        stays free to replay same as the rest of the body.
 
         Args:
             state: Current graph state. The last message must be an `AIMessage`
@@ -253,12 +406,32 @@ class SQLAgentClarifyNode:
 
         Returns:
             dict[str, Any]: On cancel, a terminal `agent_status`/`execution_error`.
-            On answer, a `ToolMessage` appended to `messages`, the accumulated
+            On a refusal (budget exhausted), a `ToolMessage` telling the model
+            to proceed with stated assumptions instead of pausing. On answer,
+            a `ToolMessage` appended to `messages`, the accumulated
             `clarification_answers`, and the incremented `clarification_rounds`.
         """
         last_message = _last_ai_message(state)
         tool_call = _find_tool_call(last_message, "ask_user")
         questions = tool_call.get("args", {}).get("questions") or []
+
+        clarification_rounds = state.get("clarification_rounds", 0)
+        max_clarifications = state.get("max_clarifications", self.default_max_clarifications)
+        if clarification_rounds >= max_clarifications:
+            return {
+                "messages": [
+                    ToolMessage(
+                        content=(
+                            f"Clarification budget exhausted ({max_clarifications} round(s) "
+                            "used). Do not ask again — proceed with your best-supported "
+                            "assumptions instead, and state those assumptions explicitly "
+                            "in your final Rationale."
+                        ),
+                        tool_call_id=tool_call["id"],
+                        name="ask_user",
+                    )
+                ],
+            }
 
         resume_value = interrupt({"kind": "clarification", "questions": questions})
 

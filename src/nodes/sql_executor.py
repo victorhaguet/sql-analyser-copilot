@@ -42,6 +42,11 @@ def _format_execution_error(error: DatabaseError, sql: str, state: SQLAgentState
         "previous_sql": sql,
         "retry_count": state.get("retry_count", 0) + 1,
         "agent_status": "repairing",
+        # Step 10 (D5): each repair re-entry gets its own iteration allowance,
+        # so it isn't starved by iterations already spent on the first attempt.
+        # `agent_iterations` is a plain overwrite field (not a reducer), so
+        # this resets it for the next sql_agent_llm call rather than merging.
+        "agent_iterations": 0,
     }
 
 def _execute_sql(

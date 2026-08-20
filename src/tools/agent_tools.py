@@ -12,6 +12,7 @@ description — they are written for the model, not for a maintainer.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -27,16 +28,16 @@ from tools.database import SQLiteDatabase, format_table_detail
 from tools.exceptions import SQLSafetyError
 from tools.sql_safety import SQLSafetyValidator
 
+# Env-tunable (Step 10, D5); the other AgentToolLimits fields aren't named in
+# the plan's guardrail list and stay static defaults.
+DEFAULT_PROBE_ROW_LIMIT = int(os.getenv("SQL_AGENT_PROBE_ROW_LIMIT", "20"))
+
 
 @dataclass(slots=True)
 class AgentToolLimits:
-    """Tunable limits for the agent tools.
+    """Tunable limits for the agent tools."""
 
-    Defaults are conservative placeholders; Step 10 of the agentic SQL
-    generation plan wires these to environment variables.
-    """
-
-    probe_row_limit: int = 20
+    probe_row_limit: int = DEFAULT_PROBE_ROW_LIMIT
     probe_row_limit_max: int = 50
     probe_timeout_seconds: float = 5.0
     sample_row_limit: int = 3

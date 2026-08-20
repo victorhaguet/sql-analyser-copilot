@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, cast
@@ -18,9 +19,9 @@ from utils.nodes import LLM, ToolCallingChatModel
 
 INTERRUPT_KEY = "__interrupt__"
 
-# Backstop for a router bug producing an unbounded loop (D5). Step 10 makes
-# this env-tunable via SQL_AGENT_RECURSION_LIMIT; this is its default value.
-DEFAULT_AGENT_RECURSION_LIMIT = 40
+# Backstop for a router bug producing an unbounded loop (D5), env-tunable via
+# SQL_AGENT_RECURSION_LIMIT.
+DEFAULT_AGENT_RECURSION_LIMIT = int(os.getenv("SQL_AGENT_RECURSION_LIMIT", "40"))
 
 
 @dataclass
