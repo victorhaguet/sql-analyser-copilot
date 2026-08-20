@@ -33,6 +33,8 @@ LangGraph nodes for the SQL copilot agent workflow - database selection, intent 
   mixed-batch ask_user calls (D3) and enforces the probe budget
 - SQLAgentClarifyNode - Interrupts for user input when ask_user is the sole tool call
 - SQLAgentFinalizeNode - Extracts the final SQL + rationale, or resets state for a repair pass
+- SQLAgentBudgetExhaustedNode - Asks the (unbound) model to explain what it
+  learned when the iteration cap is hit while tools are still pending
 - SQLValidatorNode - Validates SQL safety
 - SQLModificationValidatorNode - Manages modification confirmation
 - SQLExecutorNode - Executes SQL queries; formats a repair-turn HumanMessage on failure
@@ -53,11 +55,14 @@ LangGraph nodes for the SQL copilot agent workflow - database selection, intent 
 6. **sql_agent_finalize** → Extracts the final SQL statement (+ optional
    rationale) from the transcript; on a repair pass, resets validation/execution
    state the same way the retired fallback regenerator used to
-7. **sql_validator** → Validates SQL for query (SELECT only, no forbidden keywords)
-8. **modification_validator** → **Interruption point**: pauses execution and waits for user confirmation before modifications
-9. **sql_executor** → Executes validated SQL with result limit; on failure,
-   routes back to sql_agent_llm (bounded by `retry_count` / `max_retries`)
-10. **result_analyst** → Produces user-friendly analysis
+7. **sql_agent_budget_exhausted** → Reached only if the model still wants to
+   call tools once the iteration cap is hit (a clean finalize is never
+   blocked); asks the unbound model to explain its progress, then ends
+8. **sql_validator** → Validates SQL for query (SELECT only, no forbidden keywords)
+9. **modification_validator** → **Interruption point**: pauses execution and waits for user confirmation before modifications
+10. **sql_executor** → Executes validated SQL with result limit; on failure,
+    routes back to sql_agent_llm (bounded by `retry_count` / `max_retries`)
+11. **result_analyst** → Produces user-friendly analysis
 
 ### Interruption Workflow
 

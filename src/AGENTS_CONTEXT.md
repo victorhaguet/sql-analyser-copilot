@@ -21,7 +21,7 @@ Root folder for the SQL Copilot application - FastAPI backend and Streamlit UI e
 
 ## Architecture
 
-The SQL Copilot uses an 11-node LangGraph workflow with conditional routing and
+The SQL Copilot uses a 12-node LangGraph workflow with conditional routing and
 interruption support. SQL generation is no longer a single-shot node: a bounded
 agent loop (`sql_agent_llm` ⇄ `sql_agent_tools`, with a separate interrupting
 node for user clarification) decides on its own how many times to inspect the
@@ -43,10 +43,13 @@ full design rationale.
    sole requested tool call
 7. **SQL Agent Finalize** - Extracts the final SQL + rationale from the
    transcript, or resets state for a repair pass (D6)
-8. **SQL Validator** - Ensures query safety for SELECT operations (no destructive operations)
-9. **Modification Validator** - Manages interruption/confirmation workflow for modifications
-10. **SQL Executor** - Runs the validated query against the database
-11. **Result Analyst** - Analyzes results and generates insights
+8. **SQL Agent Budget Exhausted** - Asks the model (unbound, so it cannot call
+   another tool) to explain what it learned and why it couldn't finish, when
+   the iteration cap is hit while tools are still requested
+9. **SQL Validator** - Ensures query safety for SELECT operations (no destructive operations)
+10. **Modification Validator** - Manages interruption/confirmation workflow for modifications
+11. **SQL Executor** - Runs the validated query against the database
+12. **Result Analyst** - Analyzes results and generates insights
 
 ### Edge Routing
 
@@ -54,10 +57,13 @@ full design rationale.
 - **intent_classifier** → role_authorizer (for modifications) or sql_agent_llm (for queries)
 - **role_authorizer** → sql_agent_llm (authorized) or abort (unauthorized)
 - **sql_agent_llm** → sql_agent_finalize (no tool calls), sql_agent_clarify (lone
-  `ask_user` call), sql_agent_tools (other tool calls), or abort (iteration
-  budget exceeded, intent-scoped)
+  `ask_user` call), sql_agent_tools (other tool calls), or
+  sql_agent_budget_exhausted (iteration budget exceeded, intent-scoped, but
+  only if tool calls are still pending — a clean finalize is never blocked)
 - **sql_agent_tools** → sql_agent_llm (loop back)
 - **sql_agent_clarify** → sql_agent_llm (answered) or abort (cancelled)
+- **sql_agent_budget_exhausted** → end (always; the model is asked to explain
+  itself, never to keep trying)
 - **sql_agent_finalize** → sql_validator (queries), modification_validator
   (modifications), or abort (no valid SQL extracted)
 - **sql_validator** → sql_executor (valid) or abort (invalid)
