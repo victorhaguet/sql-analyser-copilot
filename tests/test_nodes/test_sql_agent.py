@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -150,6 +150,42 @@ class SQLAgentLLMNodeTestCase(unittest.TestCase):
         # The model should have seen the existing transcript, not a reseeded one.
         self.assertEqual(model.invocations[0], existing)
 
+    def test_trims_oldest_tool_exchanges_once_transcript_exceeds_the_cap(self) -> None:
+        """A very long transcript should be trimmed before the model call, keeping
+        the system message and the original question, and never orphaning a
+        ToolMessage — but persisted state must keep the full history regardless."""
+        with built_database(_SCHEMA) as database:
+            tools = build_agent_tools(database, SQLSafetyValidator(database.database_path))
+            model = ScriptedChatModel([AIMessage(content="SELECT 1")])
+            node = SQLAgentLLMNode(model, tools, database)
+
+            system = SystemMessage(content="sys")
+            human = HumanMessage(content="question")
+            long_history: list[Any] = [system, human]
+            for i in range(20):
+                long_history.append(
+                    AIMessage(
+                        content="",
+                        tool_calls=[{"name": "inspect_schema", "args": {"i": i}, "id": f"c{i}"}],
+                    )
+                )
+                long_history.append(
+                    ToolMessage(content=f"result {i}", tool_call_id=f"c{i}", name="inspect_schema")
+                )
+            # 42 messages total, well above the 30-message context cap.
+
+            result = node({"messages": long_history, "agent_iterations": 20})
+
+        sent_to_model = model.invocations[0]
+        self.assertLess(len(sent_to_model), len(long_history))
+        self.assertIs(sent_to_model[0], system)
+        self.assertIs(sent_to_model[1], human)
+        self.assertIsInstance(sent_to_model[2], AIMessage)  # never starts on an orphaned ToolMessage
+        # Trimming only affects what's sent to the model: the returned update
+        # is still just the new response, never a rewrite of persisted history.
+        self.assertEqual(len(result["messages"]), 1)
+        self.assertEqual(result["messages"][0].content, "SELECT 1")
+
     def test_binds_all_three_tools(self) -> None:
         """bind_tools should be called with inspect_schema, ask_user, run_readonly_probe."""
         with built_database(_SCHEMA) as database:
@@ -275,6 +311,77 @@ class SQLAgentToolsNodeTestCase(unittest.TestCase):
         self.assertNotIn("AC/DC", result["messages"][0].content)
         self.assertEqual(result["probe_count"], 2)
 
+    def test_identical_repeated_call_is_answered_without_reexecution(self) -> None:
+        """A call identical (name + args) to an earlier one should reuse the prior result."""
+        with built_database(_SCHEMA) as database:
+            tools = build_agent_tools(database, SQLSafetyValidator(database.database_path))
+            node = SQLAgentToolsNode(tools)
+
+            prior_call = AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "run_readonly_probe", "args": {"sql": "SELECT Name FROM Artist"}, "id": "c0"}
+                ],
+            )
+            prior_result = ToolMessage(content="AC/DC", tool_call_id="c0", name="run_readonly_probe")
+            repeat_call = AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "run_readonly_probe", "args": {"sql": "SELECT Name FROM Artist"}, "id": "c1"}
+                ],
+            )
+
+            result = node(
+                {"messages": [prior_call, prior_result, repeat_call], "probe_count": 1}
+            )
+
+        self.assertIn("Identical call already made", result["messages"][0].content)
+        self.assertIn("AC/DC", result["messages"][0].content)
+        # No new execution happened: the probe budget must not have moved.
+        self.assertEqual(result["probe_count"], 1)
+
+    def test_identical_calls_in_the_same_batch_are_deduplicated(self) -> None:
+        """Two identical calls within one batch should only execute the first."""
+        with built_database(_SCHEMA) as database:
+            tools = build_agent_tools(database, SQLSafetyValidator(database.database_path))
+            node = SQLAgentToolsNode(tools)
+
+            message = AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "run_readonly_probe", "args": {"sql": "SELECT Name FROM Artist"}, "id": "c1"},
+                    {"name": "run_readonly_probe", "args": {"sql": "SELECT Name FROM Artist"}, "id": "c2"},
+                ],
+            )
+            result = node({"messages": [message], "probe_count": 0})
+
+        self.assertEqual(len(result["messages"]), 2)
+        first, second = result["messages"]
+        self.assertIn("AC/DC", first.content)
+        self.assertIn("Identical call already made", second.content)
+        self.assertEqual(result["probe_count"], 1)
+
+    def test_different_args_are_not_deduplicated(self) -> None:
+        """A call whose arguments differ from an earlier one must execute normally."""
+        with built_database(_SCHEMA) as database:
+            tools = build_agent_tools(database, SQLSafetyValidator(database.database_path))
+            node = SQLAgentToolsNode(tools)
+
+            prior_call = AIMessage(
+                content="",
+                tool_calls=[{"name": "inspect_schema", "args": {"tables": ["Artist"]}, "id": "c0"}],
+            )
+            prior_result = ToolMessage(content="Artist schema", tool_call_id="c0", name="inspect_schema")
+            new_call = AIMessage(
+                content="",
+                tool_calls=[{"name": "inspect_schema", "args": {"tables": ["Album"]}, "id": "c1"}],
+            )
+
+            result = node({"messages": [prior_call, prior_result, new_call]})
+
+        self.assertNotIn("Identical call already made", result["messages"][0].content)
+        self.assertIn("Album", result["messages"][0].content)
+
     def test_tool_exception_becomes_tool_message_not_crash(self) -> None:
         """A tool that raises must produce a ToolMessage, never propagate the exception."""
 
@@ -343,6 +450,47 @@ class SQLAgentClarifyNodeTestCase(unittest.TestCase):
         payload = mock_interrupt.call_args[0][0]
         self.assertEqual(payload["kind"], "clarification")
         self.assertEqual(payload["questions"][0]["key"], "genre")
+
+    def test_refuses_past_the_clarification_budget_without_interrupting(self) -> None:
+        """Past max_clarifications, the node must refuse and never call interrupt()."""
+        with patch("nodes.sql_agent.interrupt") as mock_interrupt:
+            result = SQLAgentClarifyNode(max_clarifications=2)(
+                {"messages": [self._ask_user_message()], "clarification_rounds": 2}
+            )
+
+        mock_interrupt.assert_not_called()
+        self.assertIn("budget exhausted", result["messages"][0].content.lower())
+        self.assertIn("assumptions", result["messages"][0].content.lower())
+        self.assertEqual(result["messages"][0].tool_call_id, "c1")
+        self.assertNotIn("clarification_rounds", result)
+        self.assertNotIn("agent_status", result)
+
+    def test_state_max_clarifications_overrides_constructor_default(self) -> None:
+        """A max_clarifications set on state should take priority, like max_probes does."""
+        with patch("nodes.sql_agent.interrupt") as mock_interrupt:
+            result = SQLAgentClarifyNode(max_clarifications=10)(
+                {
+                    "messages": [self._ask_user_message()],
+                    "clarification_rounds": 1,
+                    "max_clarifications": 1,
+                }
+            )
+
+        mock_interrupt.assert_not_called()
+        self.assertIn("budget exhausted", result["messages"][0].content.lower())
+
+    def test_under_budget_still_interrupts_normally(self) -> None:
+        """Below the cap, the node must behave exactly as before (D3 unaffected)."""
+        with patch(
+            "nodes.sql_agent.interrupt",
+            return_value={"decision": "answer", "answers": [{"key": "genre", "answer": "Rock"}]},
+        ) as mock_interrupt:
+            result = SQLAgentClarifyNode(max_clarifications=3)(
+                {"messages": [self._ask_user_message()], "clarification_rounds": 1}
+            )
+
+        mock_interrupt.assert_called_once()
+        self.assertEqual(result["clarification_rounds"], 2)
 
     def test_cancel_sets_terminal_status(self) -> None:
         """A cancel resume value should mark the run cancelled, not proceed."""

@@ -60,6 +60,20 @@ class SQLExecutorNodeTestCase(unittest.TestCase):
         self.assertIn("INSERT INTO Artists (Name) VALUES ('Mandyspie')", message.content)
         self.assertIn("no such table", message.content.lower())
 
+    def test_error_path_resets_agent_iterations_for_the_repair_attempt(self) -> None:
+        """Step 10 (D5): a repair re-entry must get its own iteration allowance,
+        so it isn't starved by iterations already spent on the first attempt."""
+        result = SQLExecutorNode(database=fixture_database())(
+            {
+                "intent": "modification",
+                "generated_sql": "INSERT INTO Artists (Name) VALUES ('Mandyspie')",
+                "retry_count": 0,
+                "agent_iterations": 8,
+            }
+        )
+
+        self.assertEqual(result["agent_iterations"], 0)
+
     def test_error_path_increments_retry_count_from_existing_value(self) -> None:
         """Repeated failures must keep incrementing, matching max_retries semantics."""
         result = SQLExecutorNode(database=fixture_database())(
