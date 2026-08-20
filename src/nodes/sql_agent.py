@@ -33,14 +33,13 @@ from utils.nodes import ToolCallingChatModel, render_prompt
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "sql_agent.j2"
 
-# Env-tunable guardrails (Step 10, D5).
+# Env-tunable guardrails.
 DEFAULT_MAX_PROBES = int(os.getenv("SQL_AGENT_MAX_PROBES", "6"))
 DEFAULT_MAX_CLARIFICATIONS = int(os.getenv("SQL_AGENT_MAX_CLARIFICATIONS", "3"))
 
 # Not an env var named in the plan: a generous ceiling on the transcript sent
-# to the model per call, well above what a maxed-out modification run (10
-# iterations + 3 clarification rounds) naturally produces, so it only ever
-# bites a genuinely pathological repair loop.
+# to the model per call, well above what a maxed-out modification run
+# naturally produces, so it only ever bites a genuinely pathological repair loop.
 MAX_CONTEXT_MESSAGES = 30
 
 _RATIONALE_MARKER = re.compile(r"(?im)^[ \t]*rationale[ \t]*:[ \t]*")
@@ -84,21 +83,6 @@ def _default_max_schema_chars() -> int | None:
 
 def _trim_llm_context(messages: list[AnyMessage], max_messages: int = MAX_CONTEXT_MESSAGES) -> list[AnyMessage]:
     """Cap the transcript sent to the model on this call, without touching persisted state.
-
-    Always keeps the first two messages (`SystemMessage`, the original-question
-    `HumanMessage` — see `SQLAgentLLMNode.__call__`'s seeding), then trims the
-    *oldest* tool exchanges from what follows once the transcript grows past
-    `max_messages`. Trimming only what is sent to `bound_model.invoke(...)`
-    keeps `state["messages"]` — and therefore the trace and the UI's "Agent
-    steps" tab — showing the full history regardless of this cap.
-
-    `trim_messages`'s own `start_on`/`include_system` options don't fit this
-    shape directly: this transcript typically has only one `HumanMessage` (the
-    seed), so anchoring the kept tail on "the most recent human message" would
-    usually keep nothing recent at all. Instead the head is sliced off
-    manually, and `trim_messages` is applied only to the tail, anchored on
-    `("human", "ai")` so it never keeps a `ToolMessage` with no preceding
-    `AIMessage` — which would be a malformed sequence the LLM API would reject.
 
     Args:
         messages: The full persisted transcript (`state["messages"]`).
@@ -241,10 +225,6 @@ def _tool_call_key(name: str, args: dict[str, Any]) -> tuple[str, str]:
 
 def _index_previous_tool_results(messages: list[AnyMessage]) -> dict[tuple[str, str], str]:
     """Map every already-executed (name, args) tool call to its prior result.
-
-    Used to deduplicate a repeated identical call (the single most common
-    agent failure loop, per the plan): a stuck model re-issuing the same probe
-    or schema inspection instead of finalizing.
 
     Args:
         messages: The transcript so far (`state["messages"]`, before this turn's batch).
@@ -396,7 +376,7 @@ class SQLAgentClarifyNode:
     def __call__(self, state: SQLAgentState) -> dict[str, Any]:
         """Pause for user input, then fold the answers back into the transcript.
 
-        Refuses past the clarification budget (Step 10) *before* calling
+        Refuses past the clarification budget before calling
         `interrupt()`: no pause is ever raised for a refused round, so this
         stays free to replay same as the rest of the body.
 

@@ -28,8 +28,6 @@ from tools.database import SQLiteDatabase, format_table_detail
 from tools.exceptions import SQLSafetyError
 from tools.sql_safety import SQLSafetyValidator
 
-# Env-tunable (Step 10, D5); the other AgentToolLimits fields aren't named in
-# the plan's guardrail list and stay static defaults.
 DEFAULT_PROBE_ROW_LIMIT = int(os.getenv("SQL_AGENT_PROBE_ROW_LIMIT", "20"))
 
 
