@@ -26,6 +26,7 @@ class ConfigTestCase(unittest.TestCase):
             "SQL_COPILOT_MODEL": None,
             "SQL_COPILOT_ANALYST_MODEL": None,
             "SQL_COPILOT_AGENT_MODEL": None,
+            "SQL_COPILOT_AGENT_REASONING_EFFORT": None,
             "ENABLE_TRACE_LOGGING": None,
             "TRACE_LOG_DIR": None,
         }
@@ -167,6 +168,29 @@ class ConfigTestCase(unittest.TestCase):
 
         self.assertIsNotNone(chat_model)
         self.assertFalse(getattr(chat_model, "use_responses_api", False))
+
+    def test_load_sql_agent_model_from_env_detects_reasoning_model_by_default(self) -> None:
+        """A known reasoning-tier model name should get reasoning_effort='none' with no env override."""
+        os.environ["OPENAI_API_KEY"] = "test-key"
+        os.environ["SQL_COPILOT_AGENT_MODEL"] = "gpt-5"
+        os.environ.pop("SQL_COPILOT_AGENT_REASONING_EFFORT", None)
+
+        chat_model = config.load_sql_agent_model_from_env()
+
+        self.assertIsNotNone(chat_model)
+        self.assertEqual(chat_model.reasoning_effort, "none")
+
+    def test_load_sql_agent_model_from_env_reasoning_effort_env_override(self) -> None:
+        """SQL_COPILOT_AGENT_REASONING_EFFORT should override the name-based default,
+        covering gateway aliases the heuristic doesn't recognize."""
+        os.environ["OPENAI_API_KEY"] = "test-key"
+        os.environ["SQL_COPILOT_AGENT_MODEL"] = "terra-large"
+        os.environ["SQL_COPILOT_AGENT_REASONING_EFFORT"] = "none"
+
+        chat_model = config.load_sql_agent_model_from_env()
+
+        self.assertIsNotNone(chat_model)
+        self.assertEqual(chat_model.reasoning_effort, "none")
 
     def test_create_app_stores_sql_agent_model_on_state(self) -> None:
         """create_app should expose the injected sql_agent_model via app.state."""
