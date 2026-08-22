@@ -65,6 +65,11 @@ def load_sql_agent_model_from_env() -> Any | None:
     `ChatOpenAI` (not wrapped in `OpenAICompatibleResponsesModel`) so `bind_tools`
     is reachable directly.
 
+    `SQL_COPILOT_AGENT_REASONING_EFFORT`, if set, overrides
+    `build_tool_calling_chat_model`'s name-based reasoning-model detection —
+    useful when a gateway/proxy aliases a reasoning model under a name the
+    heuristic doesn't recognize.
+
     Returns:
         A `ChatOpenAI` instance, or `None` if the API key or a model name is not
         configured.
@@ -78,10 +83,12 @@ def load_sql_agent_model_from_env() -> Any | None:
         return None
 
     base_url: str | None = os.getenv("OPENAI_BASE_URL")
+    reasoning_effort = os.getenv("SQL_COPILOT_AGENT_REASONING_EFFORT") or None
     return build_tool_calling_chat_model(
         model=agent_model_name,
         api_key=api_key,
         base_url=base_url,
+        reasoning_effort=reasoning_effort,
     )
 
 
