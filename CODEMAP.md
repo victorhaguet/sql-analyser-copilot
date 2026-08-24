@@ -48,8 +48,7 @@ Individual processing nodes in the LangGraph workflow with conditional routing.
 | `database_checker.py` | Verifies the user's question matches the selected database's schema |
 | `intent_classifier.py` | Classifies user intent as query or modification |
 | `role_authorizer.py` | Checks user role authorization for modification operations |
-| `sql_agent.py` | The SQL generation agent loop — four nodes (`SQLAgentLLMNode`, `SQLAgentToolsNode`, `SQLAgentClarifyNode`, `SQLAgentFinalizeNode`) plus `SQLAgentBudgetExhaustedNode`, wired into `graph.py` in place of `sql_generator.py` and the retired `sql_fallback_regenerator.py`. The model decides on its own how many times to inspect the schema, ask the user for business details, and probe the database read-only before committing to a final statement |
-| `sql_generator.py` | Single-shot NL→SQL node. No longer wired into the graph (replaced by `sql_agent.py`); kept in the repo but unused |
+| `sql_agent.py` | The SQL generation agent loop — five nodes (`SQLAgentLLMNode`, `SQLAgentToolsNode`, `SQLAgentClarifyNode`, `SQLAgentFinalizeNode`, `SQLAgentBudgetExhaustedNode`). The model decides how many times to inspect the schema, ask the user for business details, and probe the database read-only before committing to a final statement |
 | `sql_validator.py` | Validates SQL for safety (SELECT-only for queries) |
 | `sql_modification_validator.py` | Manages modification confirmation workflow |
 | `sql_executor.py` | Executes validated SQL queries against the database; on failure, feeds the error back into the agent's `messages` transcript and increments `retry_count` so `sql_agent_llm` can repair it in-loop instead of via a dedicated regeneration node |
@@ -94,7 +93,6 @@ Jinja2 prompt templates for LLM interactions.
 | `database_checker.j2` | Prompt template for the database-checker node |
 | `intent_classifier.j2` | Prompt template for intent classification |
 | `sql_agent.j2` | System prompt seeding the SQL generation agent loop — the three tools, probe-before-finalize, `ask_user`-alone, and INSERT/UPDATE/DELETE pre-conditions. No hardcoded fallback: the node raises if this file is missing or empty |
-| `sql_generator.j2` | Prompt template for the retired single-shot `sql_generator.py` node; unused by the graph |
 | `result_analyst_query.j2` | Prompt template for analyzing SELECT results |
 | `result_analyst_modification.j2` | Prompt template for summarizing a completed modification |
 
@@ -150,7 +148,7 @@ The test directory mirrors the source structure:
 2. **Database Check** → `DatabaseCheckerNode` (`nodes/database_checker.py`) or abort
 3. **Intent Classification** → `IntentClassifierNode` (`nodes/intent_classifier.py`)
 4. **Role Authorization** → `RoleAuthorizerNode` (`nodes/role_authorizer.py`) for modifications, or skip for queries
-5. **SQL Generation Agent Loop** → `nodes/sql_agent.py`'s four nodes, driven by a
+5. **SQL Generation Agent Loop** → `nodes/sql_agent.py`'s five nodes, driven by a
    tool-calling model that decides on its own how much schema inspection,
    clarification, and read-only probing it needs:
    - **sql_agent_llm** — seeds/continues the transcript, calls the model
