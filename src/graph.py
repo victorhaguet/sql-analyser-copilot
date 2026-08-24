@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Iterator, Literal, Protocol, TypedDict, cast
+from typing import Any, Iterator, Literal, Mapping, Protocol, TypedDict, cast
 from uuid import uuid4
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -201,8 +201,6 @@ def _summarize_step_outcome(
         return "agent_budget_exhausted"
     if update.get("agent_status") == "repairing":
         return "agent_repairing"
-    if update.get("regeneration_error"):
-        return "regeneration_failed"
     if update.get("sql_validation_error"):
         return "validation_failed"
     if update.get("execution_error"):
@@ -235,7 +233,7 @@ def _summarize_step_outcome(
 
 
 def _merge_state_update(
-    current_state: SQLAgentState, update: dict[str, Any]
+    current_state: SQLAgentState, update: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Merge a node update into state, concatenating reducer fields (messages)
     instead of overwriting them.
@@ -356,10 +354,9 @@ def stream_sql_agent_execution(
 
 
 def build_sql_agent_graph(
-    sql_generator_model: LLM,
+    database_checker_model: LLM,
     agent_model: ToolCallingChatModel,
     analyst_model: LLM | None = None,
-    selector_model: LLM | None = None,
     intent_model: LLM | None = None,
     selected_database: SQLiteDatabase | None = None,
     validator: SQLSafetyValidator | None = None,
@@ -370,11 +367,10 @@ def build_sql_agent_graph(
     """Build the SQL agent graph
 
     Args:
-        sql_generator_model (LLM): Default text model, used as the intent classifier's fallback.
+        database_checker_model: Model used to check the question against the database.
         agent_model (ToolCallingChatModel): bind_tools-capable model driving the SQL generation agent loop.
         analyst_model (LLM | None, optional): SQL analyser model. Defaults to None.
-        selector_model (LLM | None, optional): Database selector model. Defaults to None.
-        intent_model (LLM | None, optional): Intent classifier model. Defaults to sql_generator_model.
+        intent_model (LLM | None, optional): Intent classifier model. Defaults to database_checker_model.
         selected_database (SQLiteDatabase): The selected database to query.
         validator (SQLSafetyValidator | None, optional): SQL safety validator. Defaults to None.
         execution_limit (int, optional): Maximum rows for query execution. Defaults to 200.
@@ -390,8 +386,14 @@ def build_sql_agent_graph(
     agent_tools = build_agent_tools(selected_database, agent_validator, agent_tool_limits)
 
     graph = StateGraph(SQLAgentState)
-    graph.add_node(NODE_DATABASE_CHECKER, DatabaseCheckerNode(database=selected_database, model=selector_model))
-    graph.add_node(NODE_INTENT_CLASSIFIER, IntentClassifierNode(intent_model or sql_generator_model))
+    graph.add_node(
+        NODE_DATABASE_CHECKER,
+        DatabaseCheckerNode(database=selected_database, model=database_checker_model),
+    )
+    graph.add_node(
+        NODE_INTENT_CLASSIFIER,
+        IntentClassifierNode(intent_model or database_checker_model),
+    )
     graph.add_node(NODE_ROLE_AUTHORIZER, RoleAuthorizerNode())
     graph.add_node(NODE_SQL_AGENT_LLM, SQLAgentLLMNode(agent_model, agent_tools, selected_database))
     graph.add_node(NODE_SQL_AGENT_TOOLS, SQLAgentToolsNode(agent_tools))

@@ -19,9 +19,6 @@ Jinja2 prompt templates for SQL copilot nodes.
   other node, this file has **no hardcoded fallback string** —
   `SQLAgentLLMNode` raises if it is missing or empty rather than silently
   degrading to a weaker built-in prompt.
-- **sql_generator.j2**: Template for the retired single-shot `sql_generator.py`
-  node. Not rendered by `build_sql_agent_graph`; kept only because
-  `sql_generator.py` itself is kept unused in the repo.
 
 Notes: `role_authorizer.py` and `sql_validator.py` are pure code (no LLM call),
 so they have no `.j2` template here.
@@ -41,7 +38,6 @@ so they have no `.j2` template here.
 - **result_analyst_modification**: `question`, `sql`
 - **sql_agent**: `intent`, `schema_overview`, `schema_truncated` (the question
   itself is a separate seeded `HumanMessage`, not a template variable)
-- **sql_generator** (unused): `question`, `schema_overview`
 
 ## When to Read Files
 

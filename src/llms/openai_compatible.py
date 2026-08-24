@@ -49,20 +49,6 @@ class OpenAICompatibleResponsesModel(LLM):
             message_input = prompt
         return extract_text_from_response(self.client.invoke(message_input))
 
-    @property
-    def chat_model(self) -> Any:
-        """
-        Expose the underlying LangChain chat model.
-
-        The wrapper only implements `invoke(prompt: str) -> str`, which cannot
-        express a tool call. This property reaches the raw client (e.g. `ChatOpenAI`)
-        so callers that need `bind_tools` are not forced to build a second client.
-
-        Returns:
-            The underlying LangChain chat model client.
-        """
-        return self.client
-
     @staticmethod
     def _build_client(
         model: str,

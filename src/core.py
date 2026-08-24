@@ -210,7 +210,6 @@ def _serialize_state(state: SQLAgentState, question: str) -> dict[str, Any]:
         "retry_count": state.get("retry_count", 0),
         "max_retries": state.get("max_retries", 3),
         "last_execution_error": state.get("last_execution_error"),
-        "regeneration_error": state.get("regeneration_error"),
         "previous_sql": state.get("previous_sql"),
         "regeneration_explanation": state.get("regeneration_explanation"),
         "messages": _serialize_messages(messages),
@@ -369,10 +368,9 @@ def _attach_trace_metadata(
 
 def start_question(
     question: str,
-    sql_generator_model: LLM,
+    database_checker_model: LLM,
     agent_model: ToolCallingChatModel,
     analyst_model: LLM | None = None,
-    selector_model: LLM | None = None,
     intent_model: LLM | None = None,
     selected_database: SQLiteDatabase | None = None,
     validator: SQLSafetyValidator | None = None,
@@ -388,10 +386,9 @@ def start_question(
     thread_id = uuid4().hex
     config = _build_thread_config(thread_id)
     graph = build_sql_agent_graph(
-        sql_generator_model=sql_generator_model,
+        database_checker_model=database_checker_model,
         agent_model=agent_model,
         analyst_model=analyst_model,
-        selector_model=selector_model,
         intent_model=intent_model,
         selected_database=selected_database,
         validator=validator,
@@ -567,10 +564,9 @@ def resume_question(
 
 def answer_question(
     question: str,
-    sql_generator_model: LLM,
+    database_checker_model: LLM,
     agent_model: ToolCallingChatModel,
     analyst_model: LLM | None = None,
-    selector_model: LLM | None = None,
     intent_model: LLM | None = None,
     selected_database: SQLiteDatabase | None = None,
     validator: SQLSafetyValidator | None = None,
@@ -583,10 +579,9 @@ def answer_question(
 
     Args:
         question: The natural language question to answer.
-        sql_generator_model: Default text model, used as the intent classifier's fallback.
+        database_checker_model: Model used to check the question against the database.
         agent_model: bind_tools-capable model driving the SQL generation agent loop.
         analyst_model: The language model to use for result analysis (optional).
-        selector_model: The language model to use for database selection (optional).
         intent_model: The language model to use for intent classification (optional).
         selected_database: The SQLiteDatabase instance to query (optional).
         validator: The SQLSafetyValidator instance to use for query validation (optional).
@@ -600,10 +595,9 @@ def answer_question(
     """
     return start_question(
         question=question,
-        sql_generator_model=sql_generator_model,
+        database_checker_model=database_checker_model,
         agent_model=agent_model,
         analyst_model=analyst_model,
-        selector_model=selector_model,
         intent_model=intent_model,
         selected_database=selected_database,
         validator=validator,
@@ -617,10 +611,9 @@ def answer_question(
 
 def stream_question(
     question: str,
-    sql_generator_model: LLM,
+    database_checker_model: LLM,
     agent_model: ToolCallingChatModel,
     analyst_model: LLM | None = None,
-    selector_model: LLM | None = None,
     intent_model: LLM | None = None,
     selected_database: SQLiteDatabase | None = None,
     validator: SQLSafetyValidator | None = None,
@@ -634,10 +627,9 @@ def stream_question(
 
     Args:
         question: The natural language question to answer.
-        sql_generator_model: Default text model, used as the intent classifier's fallback.
+        database_checker_model: Model used to check the question against the database.
         agent_model: bind_tools-capable model driving the SQL generation agent loop.
         analyst_model: The language model to use for result analysis (optional).
-        selector_model: The language model to use for database selection (optional).
         intent_model: The language model to use for intent classification (optional).
         selected_database: The SQLiteDatabase instance to query (optional).
         validator: The SQLSafetyValidator instance to use for query validation (optional).
@@ -648,10 +640,9 @@ def stream_question(
         An iterator of SQLAgentTraceStep dictionaries representing the execution trace of the graph.
     """
     graph = build_sql_agent_graph(
-        sql_generator_model=sql_generator_model,
+        database_checker_model=database_checker_model,
         agent_model=agent_model,
         analyst_model=analyst_model,
-        selector_model=selector_model,
         intent_model=intent_model,
         selected_database=selected_database,
         validator=validator,

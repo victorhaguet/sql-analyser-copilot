@@ -8,13 +8,9 @@ LangGraph nodes for the SQL copilot agent workflow - database selection, intent 
 - **database_checker.py**: Verify if the database correspond to the field of the user's question.
 - **intent_classifier.py**: Classifies user intent (query vs modification)
 - **role_authorizer.py**: Checks if user has authorization for modification operations
-- **sql_agent.py**: The SQL generation agent loop — four nodes
+- **sql_agent.py**: The SQL generation agent loop — five nodes
   (`SQLAgentLLMNode`, `SQLAgentToolsNode`, `SQLAgentClarifyNode`,
-  `SQLAgentFinalizeNode`), wired into `graph.py` in place of `sql_generator.py`
-  and `sql_fallback_regenerator.py` (both retired from the graph).
-- **sql_generator.py**: Single-shot NL→SQL node. No longer wired into the
-  graph (replaced by `sql_agent.py`); kept in the repo but unused by
-  `build_sql_agent_graph`.
+  `SQLAgentFinalizeNode`, `SQLAgentBudgetExhaustedNode`).
 - **sql_validator.py**: Validates generated SQL for safety before execution
 - **sql_modification_validator.py**: Manages interruption/confirmation workflow for modifications
 - **sql_executor.py**: Executes validated SQL against SQLite database; on
@@ -39,7 +35,6 @@ LangGraph nodes for the SQL copilot agent workflow - database selection, intent 
 - SQLModificationValidatorNode - Manages modification confirmation
 - SQLExecutorNode - Executes SQL queries; formats a repair-turn HumanMessage on failure
 - ResultAnalystNode - Analyzes query results
-- SQLGeneratorNode - Unused by the graph; kept for potential reuse
 
 ## Node Execution Flow
 

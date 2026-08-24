@@ -109,7 +109,6 @@ class QueryResponse(BaseModel):
     retry_count: int = 0
     max_retries: int = 3
     last_execution_error: str | None = None
-    regeneration_error: str | None = None
     previous_sql: str | None = None
     regeneration_explanation: str | None = None
     messages: list[dict[str, Any]] = Field(default_factory=list)

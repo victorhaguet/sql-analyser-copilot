@@ -341,7 +341,7 @@ def _render_question_panel() -> bool:
         bool: return if the question was submitted or not
     """
     with st.form("sql-copilot-form"):
-        question = st.text_area(
+        st.text_area(
             "Question",
             key="question_input",
             placeholder="Example: Which 5 artists have the most albums ?",

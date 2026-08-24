@@ -142,16 +142,6 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
         body = "\n".join(lines)
         return f"{format_trace_header('Graph step')}\n{body}"
 
-    if node == "sql_generator":
-        body = "\n".join(
-            [
-                f"Node: {node}",
-                f"Outcome: {step['outcome']}",
-                update.get("generated_sql", ""),
-            ]
-        ).strip()
-        return f"{format_trace_header('Graph step')}\n{body}"
-    
     if node == "sql_agent_llm":
         messages = update.get("messages") or []
         ai_message = messages[-1] if messages else None

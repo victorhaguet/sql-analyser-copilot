@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
-from fastapi import FastAPI, Header, HTTPException # pylint: disable=unused-import
+
+from fastapi import Header, HTTPException
 
 from tools.database import DatabaseError, SQLiteDatabase
 from config import create_app_from_env
@@ -257,10 +258,9 @@ def query(payload: QueryRequest, x_user_sub: str = Header(...), x_user_role: str
     try:
         result = start_question(
             question=payload.question,
-            sql_generator_model=app.state.sql_generator_model,
+            database_checker_model=app.state.database_checker_model,
             agent_model=app.state.sql_agent_model,
             analyst_model=app.state.analyst_model,
-            selector_model=app.state.selector_model,
             intent_model=app.state.intent_model,
             selected_database=database,
             validator=app.state.validator,

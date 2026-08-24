@@ -31,7 +31,6 @@ def build_empty_result_state() -> dict[str, Any]:
         "retry_count": 0,
         "max_retries": 3,
         "last_execution_error": None,
-        "regeneration_error": None,
         "previous_sql": "",
         "regeneration_explanation": "",
         "messages": [],
@@ -105,7 +104,6 @@ def build_display_context(response_data: dict[str, Any]) -> dict[str, Any]:
         "retry_count": response_data.get("retry_count", 0),
         "max_retries": response_data.get("max_retries", 3),
         "last_execution_error": response_data.get("last_execution_error"),
-        "regeneration_error": response_data.get("regeneration_error"),
         "previous_sql": response_data.get("previous_sql") or "",
         "regeneration_explanation": response_data.get("regeneration_explanation") or "",
         "messages": response_data.get("messages") or [],
@@ -126,10 +124,8 @@ def build_display_context(response_data: dict[str, Any]) -> dict[str, Any]:
             response_data.get("execution_error")
             or response_data.get("sql_validation_error")
             or response_data.get("intent_error")
-            or response_data.get("regeneration_error")
         ),
-        "error_message": response_data.get("regeneration_error")
-        or response_data.get("execution_error")
+        "error_message": response_data.get("execution_error")
         or response_data.get("sql_validation_error")
         or response_data.get("intent_error")
         or "",

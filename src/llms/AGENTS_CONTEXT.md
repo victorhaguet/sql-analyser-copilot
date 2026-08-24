@@ -10,8 +10,7 @@ LLM provider integrations - currently OpenAI-compatible API wrapper.
 ## Important Exports
 
 - OpenAICompatibleResponsesModel - LLM adapter implementing the LLM protocol
-  (`invoke(prompt: str) -> str`); exposes the raw client via its `chat_model`
-  property for callers that need `bind_tools`.
+  (`invoke(prompt: str) -> str`).
 - build_tool_calling_chat_model - builds a plain `ChatOpenAI` (no
   `use_responses_api`) satisfying `utils.nodes.ToolCallingChatModel`, used for
   the SQL generation agent loop.

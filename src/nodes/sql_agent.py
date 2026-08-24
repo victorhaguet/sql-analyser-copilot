@@ -1,10 +1,9 @@
-"""SQL generation agent loop: llm_call / tool_node / clarify / finalize.
+"""SQL generation agent loop: call, tools, clarification, finalization, and wrap-up.
 
-Four LangGraph nodes replacing the single-shot `SQLGeneratorNode`. The model
-decides on its own how many times to inspect the schema, ask the user for
+The model decides how many times to inspect the schema, ask the user for
 business details, and probe the database read-only before committing to a
-final SQL statement. `messages` (see `state.SQLAgentState`) is the transcript;
-these nodes only ever append to it, never overwrite it.
+final SQL statement. ``messages`` is the persisted transcript; these nodes
+only append to it.
 """
 from __future__ import annotations
 
