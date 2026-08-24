@@ -5,7 +5,6 @@ import tempfile
 import unittest
 from pathlib import Path
 import datetime
-from typing import Any
 from unittest.mock import patch
 
 for parent in Path(__file__).resolve().parents:
@@ -132,7 +131,7 @@ class UserDatabaseTestCase(AuthTestCase):
 
     def test_get_user_by_username_returns_user(self) -> None:
         """Test that get_user_by_username returns user information."""
-        created = create_user(
+        create_user(
             username="findme",
             password_hash="hash1",
             name="Find Me",
@@ -183,7 +182,7 @@ class UserDatabaseTestCase(AuthTestCase):
 
     def test_list_users_includes_password_hash_when_requested(self) -> None:
         """Test that password hash can be included in user list."""
-        created = create_user(username="withsecret", password_hash="hash1")
+        create_user(username="withsecret", password_hash="hash1")
         
         conn = _get_connection()
         try:

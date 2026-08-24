@@ -8,37 +8,45 @@ graph TD;
 	database_checker(database_checker)
 	intent_classifier(intent_classifier)
 	role_authorizer(role_authorizer)
-	sql_generator(sql_generator)
+	sql_agent_llm(sql_agent_llm)
+	sql_agent_tools(sql_agent_tools)
+	sql_agent_clarify(sql_agent_clarify::interrupt)
+	sql_agent_finalize(sql_agent_finalize)
+	sql_agent_budget_exhausted(sql_agent_budget_exhausted)
 	sql_validator(sql_validator)
 	modification_validator(modification_validator::interrupt)
 	sql_executor(sql_executor)
-	sql_fallback_regenerator(sql_fallback_regenerator)
 	result_analyst(result_analyst)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> database_checker;
 	database_checker -. &nbsp;abort&nbsp; .-> __end__;
 	database_checker -.-> intent_classifier;
-	intent_classifier -.-> role_authorizer;
-	intent_classifier -.-> sql_generator;
-	modification_validator -. &nbsp;abort&nbsp; .-> __end__;
-	modification_validator -. &nbsp;confirmation&nbsp; .-> sql_executor;
+	intent_classifier -. &nbsp;modification&nbsp; .-> role_authorizer;
+	intent_classifier -. &nbsp;query&nbsp; .-> sql_agent_llm;
 	role_authorizer -. &nbsp;abort&nbsp; .-> __end__;
-	role_authorizer -.-> sql_generator;
-	sql_executor -. &nbsp;abort&nbsp; .-> __end__;
-	sql_executor -. &nbsp;fallback&nbsp; .-> sql_fallback_regenerator;
-	sql_executor -.-> result_analyst;
-	sql_fallback_regenerator -. &nbsp;abort&nbsp; .-> __end__;
-	sql_fallback_regenerator -.-> modification_validator;
-	sql_fallback_regenerator -.-> sql_validator;
-	sql_generator -.-> modification_validator;
-	sql_generator -.-> sql_validator;
+	role_authorizer -.-> sql_agent_llm;
+	sql_agent_llm -. &nbsp;no tool calls&nbsp; .-> sql_agent_finalize;
+	sql_agent_llm -. &nbsp;lone ask_user&nbsp; .-> sql_agent_clarify;
+	sql_agent_llm -. &nbsp;inspect_schema / run_readonly_probe&nbsp; .-> sql_agent_tools;
+	sql_agent_llm -. &nbsp;budget exceeded&nbsp; .-> sql_agent_budget_exhausted;
+	sql_agent_tools -. &nbsp;tools cycle&nbsp; .-> sql_agent_llm;
+	sql_agent_budget_exhausted --> __end__;
+	sql_agent_clarify -. &nbsp;cancelled&nbsp; .-> __end__;
+	sql_agent_clarify -. &nbsp;clarify cycle&nbsp; .-> sql_agent_llm;
+	sql_agent_finalize -. &nbsp;no SQL extracted&nbsp; .-> __end__;
+	sql_agent_finalize -.-> modification_validator;
+	sql_agent_finalize -.-> sql_validator;
 	sql_validator -. &nbsp;abort&nbsp; .-> __end__;
 	sql_validator -.-> sql_executor;
+	modification_validator -. &nbsp;reject&nbsp; .-> __end__;
+	modification_validator -. &nbsp;approve&nbsp; .-> sql_executor;
+	sql_executor -. &nbsp;retries exhausted&nbsp; .-> __end__;
+	sql_executor -. &nbsp;repair cycle, retries left&nbsp; .-> sql_agent_llm;
+	sql_executor -.-> result_analyst;
 	result_analyst --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
 	classDef interrupt fill:#ffe0b2,stroke:#ff9800,stroke-width:2px,color:#000
-	classDef fallback fill:#b3e5fc,stroke:#03a9f4,stroke-width:2px,color:#000
+	class sql_agent_clarify interrupt
 	class modification_validator interrupt
-	class sql_fallback_regenerator fallback

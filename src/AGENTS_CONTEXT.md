@@ -8,7 +8,11 @@ Root folder for the SQL Copilot application - FastAPI backend and Streamlit UI e
 - **main.py**: FastAPI application with endpoints (/health, /auth/*, /query)
 - **core.py**: Core business logic - graph execution and state serialization
 - **graph.py**: LangGraph state machine definition (nodes, edges, routing)
-- **state.py**: SQLAgentState TypedDict for node communication
+- **state.py**: SQLAgentState TypedDict for node communication. Also carries the
+  SQL generation agent loop's `messages` transcript (the only reducer field,
+  `Annotated[list[AnyMessage], add_messages]` — appends instead of overwriting)
+  plus its budget/status keys (`agent_status`, `agent_iterations`, `probe_count`,
+  `clarification_rounds`, ...).
 - **models.py**: Pydantic request/response models
 - **config.py**: Environment variable loading and FastAPI app wiring
 - **tracing.py**: Trace logging utilities and formatting
@@ -17,42 +21,74 @@ Root folder for the SQL Copilot application - FastAPI backend and Streamlit UI e
 
 ## Architecture
 
-The SQL Copilot uses a 9-node LangGraph workflow with conditional routing and interruption support:
+The SQL Copilot uses a 12-node LangGraph workflow with conditional routing and
+interruption support. SQL generation is no longer a single-shot node: a bounded
+agent loop (`sql_agent_llm` ⇄ `sql_agent_tools`, with a separate interrupting
+node for user clarification) decides on its own how many times to inspect the
+schema, ask the user for business details, and probe the database read-only
+before committing to a final statement. See
+[AGENTIC_SQL_GENERATION_PLAN.md](../AGENTIC_SQL_GENERATION_PLAN.md) for the
+full design rationale.
 
 ### Nodes
 
-1. **Database Selector** - Routes questions to the most relevant database
+1. **Database Checker** - Verifies the question matches the selected database
 2. **Intent Classifier** - Determines if user request is a query or modification
 3. **Role Authorizer** - Checks if user has permission for modification operations
-4. **SQL Generator** - Converts natural language to SQL using LLM
-5. **SQL Validator** - Ensures query safety for SELECT operations (no destructive operations)
-6. **Modification Validator** - Manages interruption/confirmation workflow for modifications
-7. **SQL Executor** - Runs the validated query against the database
-8. **Result Analyst** - Analyzes results and generates insights
+4. **SQL Agent LLM** - Seeds/continues the agent transcript and calls the
+   tool-calling model (`bind_tools`)
+5. **SQL Agent Tools** - Dispatches `inspect_schema`/`run_readonly_probe` calls;
+   rejects a mixed batch containing `ask_user`; enforces the probe budget
+6. **SQL Agent Clarify** - Interrupts for user input when `ask_user` is the
+   sole requested tool call
+7. **SQL Agent Finalize** - Extracts the final SQL + rationale from the
+   transcript, or resets state for a repair pass (D6)
+8. **SQL Agent Budget Exhausted** - Asks the model (unbound, so it cannot call
+   another tool) to explain what it learned and why it couldn't finish, when
+   the iteration cap is hit while tools are still requested
+9. **SQL Validator** - Ensures query safety for SELECT operations (no destructive operations)
+10. **Modification Validator** - Manages interruption/confirmation workflow for modifications
+11. **SQL Executor** - Runs the validated query against the database
+12. **Result Analyst** - Analyzes results and generates insights
 
 ### Edge Routing
 
-- **database_selector** → intent_classifier (abort if database selection fails)
-- **intent_classifier** → role_authorizer (for modifications) or sql_generator (for queries)
-- **role_authorizer** → sql_generator (authorized) or abort (unauthorized)
-- **sql_generator** → sql_validator (queries) or modification_validator (modifications)
+- **database_checker** → intent_classifier (abort if database selection fails)
+- **intent_classifier** → role_authorizer (for modifications) or sql_agent_llm (for queries)
+- **role_authorizer** → sql_agent_llm (authorized) or abort (unauthorized)
+- **sql_agent_llm** → sql_agent_finalize (no tool calls), sql_agent_clarify (lone
+  `ask_user` call), sql_agent_tools (other tool calls), or
+  sql_agent_budget_exhausted (iteration budget exceeded, intent-scoped, but
+  only if tool calls are still pending — a clean finalize is never blocked)
+- **sql_agent_tools** → sql_agent_llm (loop back)
+- **sql_agent_clarify** → sql_agent_llm (answered) or abort (cancelled)
+- **sql_agent_budget_exhausted** → end (always; the model is asked to explain
+  itself, never to keep trying)
+- **sql_agent_finalize** → sql_validator (queries), modification_validator
+  (modifications), or abort (no valid SQL extracted)
 - **sql_validator** → sql_executor (valid) or abort (invalid)
 - **modification_validator** → sql_executor (confirmed) or abort (cancelled)
-- **sql_executor** → result_analyst (success) or abort (error)
+- **sql_executor** → result_analyst (success), sql_agent_llm (execution error,
+  retries left — D6 repair), or abort (retries exhausted)
 - **result_analyst** → end
 
 ### Interruption Workflow
 
-The **Modification Validator** node uses LangGraph's interruption feature to pause execution and wait for user confirmation before executing modifications:
+Two nodes pause execution via LangGraph's interrupt feature, sharing the same
+resume/session plumbing:
 
-1. User makes a modification request (INSERT/UPDATE/DELETE)
-2. Intent classifier routes to modification path
-3. Role authorizer checks permissions
-4. SQL generator creates the modification query
-5. **Modification validator interrupts** - pauses execution and waits for user confirmation
-6. User reviews and confirms/cancels the modification
-7. If confirmed → SQL executor runs the query
-8. If cancelled → graph aborts with error
+- **SQL Agent Clarify** interrupts when the model calls `ask_user` alone,
+  surfacing its questions; resuming appends the answers to the transcript as a
+  `ToolMessage` and the loop continues.
+- **Modification Validator** interrupts before executing an INSERT/UPDATE/DELETE,
+  surfacing the draft SQL (plus, on a repair pass, `previous_sql` /
+  `regeneration_explanation`) for user approval; resuming with `approve` routes
+  to SQL Executor, `reject` aborts.
+
+A failed execution (query or modification) is fed back into the agent
+transcript by SQL Executor and routed back to SQL Agent LLM for repair,
+bounded by `retry_count` / `max_retries` — there is no separate regeneration
+node.
 
 ## Important Exports
 

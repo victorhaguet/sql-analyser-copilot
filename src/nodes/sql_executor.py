@@ -4,25 +4,45 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.messages import HumanMessage
+
 from state import SQLAgentState
 from tools.database import DatabaseError, SQLiteDatabase
 
 
-def _format_execution_error(error: DatabaseError, state: SQLAgentState) -> dict[str, Any]:
+def _format_execution_error(error: DatabaseError, sql: str, state: SQLAgentState) -> dict[str, Any]:
     """Format execution error response.
+
+    Feeds the failure back into the agent transcript (D6) and increments
+    `retry_count`, so the graph can route back to `sql_agent_llm` for repair
+    instead of the retired `sql_fallback_regenerator` node.
 
     Args:
         error (DatabaseError): Content of the error
+        sql (str): The SQL statement that failed to execute
         state (SQLAgentState): Current state to preserve retry count
 
     Returns:
         dict[str, Any]: Formatted error message
-    """    
+    """
     return {
         "execution_error": str(error),
         "analysis": f"SQL execution failed: {error}",
         "last_execution_error": str(error),
-        "retry_count": state.get("retry_count", 0),
+        "messages": [
+            HumanMessage(
+                content=(
+                    "The statement failed to execute.\n\n"
+                    f"SQL:\n{sql}\n\n"
+                    f"Error: {error}\n\n"
+                    "Diagnose and return a corrected statement."
+                )
+            )
+        ],
+        "previous_sql": sql,
+        "retry_count": state.get("retry_count", 0) + 1,
+        "agent_status": "repairing",
+        "agent_iterations": 0,
     }
 
 def _execute_sql(
@@ -40,10 +60,11 @@ def _execute_sql(
     Returns:
         dict[str, Any]: Directory with the result or an error
     """
+    sql = _resolve_sql_query(state)
     try:
-        result = database.execute_command(_resolve_sql_query(state), limit=limit)
+        result = database.execute_command(sql, limit=limit)
     except DatabaseError as exc:
-        return _format_execution_error(exc, state)
+        return _format_execution_error(exc, sql, state)
     return {
         "query_result": result,
         "execution_error": None,

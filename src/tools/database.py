@@ -15,15 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
-# Get the project root directory (where src/ is a subdirectory)
-# Walk up from the current file's location to find the project root
+from utils.paths import DEFAULT_DB_PATH
+
 _current_file = Path(__file__).resolve()
 _project_root = _current_file.parents[1] if (_current_file.parent.parent / "src").exists() else _current_file.parents[2]
 
-# Default path to the SQLite database file (Chinook sample database)
-from utils.paths import DEFAULT_DB_PATH
-
-# Exceptions and errors related to database operations
 class DatabaseError(Exception):
     """Base exception for database operations."""
 
@@ -147,6 +143,56 @@ class SQLiteDatabase:
             }
             for row in rows
         ]
+
+    def get_foreign_keys(self, table_name: str) -> list[dict[str, Any]]:
+        """
+        Get the outgoing foreign keys declared on a table in the SQLite database.
+
+        Args:
+            table_name: The name of the table.
+
+        Returns:
+            list[dict[str, Any]]: A list of dictionaries, one per foreign key column,
+            with `from_column`, `to_table`, `to_column`, and `on_delete`.
+        """
+        with self.connection() as conn:
+            rows = conn.execute(f'PRAGMA foreign_key_list("{table_name}")').fetchall()
+
+        return [
+            {
+                "from_column": row["from"],
+                "to_table": row["table"],
+                "to_column": row["to"],
+                "on_delete": row["on_delete"],
+            }
+            for row in rows
+        ]
+
+    def get_indexes(self, table_name: str) -> list[dict[str, Any]]:
+        """
+        Get the indexes declared on a table in the SQLite database.
+
+        Args:
+            table_name: The name of the table.
+
+        Returns:
+            list[dict[str, Any]]: A list of dictionaries with `name`, `unique`, and
+            `columns` for each index.
+        """
+        with self.connection() as conn:
+            index_rows = conn.execute(f'PRAGMA index_list("{table_name}")').fetchall()
+            indexes = []
+            for index_row in index_rows:
+                index_name = index_row["name"]
+                column_rows = conn.execute(f'PRAGMA index_info("{index_name}")').fetchall()
+                indexes.append(
+                    {
+                        "name": index_name,
+                        "unique": bool(index_row["unique"]),
+                        "columns": [column_row["name"] for column_row in column_rows],
+                    }
+                )
+        return indexes
 
     def get_database_schema(self) -> dict[str, list[dict[str, Any]]]:
         """
@@ -277,6 +323,146 @@ def format_database_schema(database: SQLiteDatabase) -> str:
             column_bits.append(descriptor)
         lines.append(f'{table_name}({", ".join(column_bits)})')
     return "\n".join(lines)
+
+
+def list_referencing_tables(database: SQLiteDatabase, table_name: str) -> list[dict[str, Any]]:
+    """
+    List the foreign keys, across every table in the database, that reference the
+    given table (i.e. the "incoming" foreign keys of `table_name`).
+
+    Args:
+        database: The database to inspect.
+        table_name: The referenced table.
+
+    Returns:
+        list[dict[str, Any]]: One entry per referencing column, with `table`,
+        `from_column`, and `to_column`.
+    """
+    referencing: list[dict[str, Any]] = []
+    for other_table_name in database.list_tables():
+        if other_table_name == table_name:
+            continue
+        for foreign_key in database.get_foreign_keys(other_table_name):
+            if foreign_key["to_table"] == table_name:
+                referencing.append(
+                    {
+                        "table": other_table_name,
+                        "from_column": foreign_key["from_column"],
+                        "to_column": foreign_key["to_column"],
+                    }
+                )
+    return referencing
+
+
+def format_table_detail(
+    database: SQLiteDatabase,
+    table_name: str,
+    *,
+    include_sample_rows: bool = False,
+    sample_row_limit: int = 3,
+) -> str:
+    """
+    Render a single table into a prompt-friendly, detailed block: columns with
+    type/NOT NULL/default/PK, outgoing and incoming foreign keys, unique indexes,
+    and optionally a few sample rows.
+
+    Args:
+        database: The database the table belongs to.
+        table_name: The table to describe.
+        include_sample_rows: Whether to append a handful of sample rows.
+        sample_row_limit: How many sample rows to include when requested.
+
+    Returns:
+        A multi-line, human/model-readable description of the table.
+
+    Raises:
+        TableNotFoundError: If the table does not exist in the database.
+    """
+    if not database.table_exists(table_name):
+        raise TableNotFoundError(f"Table not found: {table_name}")
+
+    columns = database.get_table_schema(table_name)
+    outgoing_foreign_keys = database.get_foreign_keys(table_name)
+    incoming_foreign_keys = list_referencing_tables(database, table_name)
+    unique_indexes = [index for index in database.get_indexes(table_name) if index["unique"]]
+
+    lines = [f"Table: {table_name}", "Columns:"]
+    for column in columns:
+        descriptor = f'  - {column["name"]} {column["type"]}'
+        if column["primary_key"]:
+            descriptor += " PRIMARY KEY"
+        if column["notnull"]:
+            descriptor += " NOT NULL"
+        if column["default_value"] is not None:
+            descriptor += f' DEFAULT {column["default_value"]}'
+        lines.append(descriptor)
+
+    lines.append("Foreign keys (outgoing):")
+    if outgoing_foreign_keys:
+        for foreign_key in outgoing_foreign_keys:
+            lines.append(
+                f'  - {table_name}.{foreign_key["from_column"]} -> '
+                f'{foreign_key["to_table"]}.{foreign_key["to_column"]}'
+            )
+    else:
+        lines.append("  - (none)")
+
+    lines.append("Foreign keys (incoming):")
+    if incoming_foreign_keys:
+        for reference in incoming_foreign_keys:
+            lines.append(
+                f'  - {reference["table"]}.{reference["from_column"]} -> '
+                f'{table_name}.{reference["to_column"]}'
+            )
+    else:
+        lines.append("  - (none)")
+
+    lines.append("Unique indexes:")
+    if unique_indexes:
+        for index in unique_indexes:
+            lines.append(f'  - {index["name"]} ({", ".join(index["columns"])})')
+    else:
+        lines.append("  - (none)")
+
+    if include_sample_rows:
+        sample_rows = database.preview_table(table_name, limit=sample_row_limit)
+        lines.append("Sample rows:")
+        if sample_rows:
+            for row in sample_rows:
+                lines.append(f"  - {row}")
+        else:
+            lines.append("  - (empty table)")
+
+    return "\n".join(lines)
+
+
+def format_full_schema(
+    database: SQLiteDatabase, *, max_chars: int | None = None
+) -> tuple[str, bool]:
+    """
+    Render the complete database schema, table by table, via `format_table_detail`
+    (no sample rows) — every column, and every foreign key in both directions.
+
+    Args:
+        database: The database to render.
+        max_chars: If the rendered text would exceed this many characters, fall back
+            to the compact `format_database_schema` output instead. `None` disables
+            the guard.
+
+    Returns:
+        A `(text, truncated)` pair. `truncated` is `True` when the detailed rendering
+        was too large and the compact fallback was returned instead.
+    """
+    blocks = [
+        format_table_detail(database, table_name, include_sample_rows=False)
+        for table_name in database.list_tables()
+    ]
+    full_text = "\n\n".join(blocks)
+
+    if max_chars is not None and len(full_text) > max_chars:
+        return format_database_schema(database), True
+
+    return full_text, False
 
 
 def register_database(

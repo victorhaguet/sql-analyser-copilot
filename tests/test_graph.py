@@ -15,15 +15,26 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
+from langchain_core.messages import AIMessage
 from langgraph.types import Command, Interrupt
 from graph import (
+    DEFAULT_MAX_AGENT_ITERATIONS_MODIFICATION,
+    DEFAULT_MAX_AGENT_ITERATIONS_QUERY,
     INTERRUPT_EVENT,
+    NODE_MODIFICATION_VALIDATOR,
     NODE_RESULT_ANALYST,
-    NODE_SQL_FALLBACK_REGENERATOR,
+    NODE_SQL_AGENT_BUDGET_EXHAUSTED,
+    NODE_SQL_AGENT_CLARIFY,
+    NODE_SQL_AGENT_FINALIZE,
+    NODE_SQL_AGENT_LLM,
+    NODE_SQL_AGENT_TOOLS,
+    NODE_SQL_VALIDATOR,
     ROUTE_ABORT,
     _normalize_stream_event,
+    _route_after_agent_llm,
+    _route_after_clarify,
     _route_after_executor,
-    _route_from_fallback_regenerator,
+    _route_after_finalize,
 )
 from state import SQLAgentState
 from graph import _summarize_step_outcome
@@ -140,6 +151,41 @@ class TestNormalizeStreamEvent(unittest.TestCase):
         with self.assertRaises(TypeError):
             _normalize_stream_event({INTERRUPT_EVENT: ["invalid"]}, {}, "updates")
 
+    def test_normalize_stream_event_accumulates_messages_instead_of_overwriting(self) -> None:
+        """Regression test: messages is a reducer field and must be appended, not replaced.
+
+        A naive `{**current_state, **update}` merge would make the trace's view
+        of state show only the newest message on every step.
+        """
+        first_message = AIMessage(content="first")
+        second_message = AIMessage(content="second")
+
+        _, _, state_after_first = _normalize_stream_event(
+            {"sql_agent_llm": {"messages": [first_message]}}, {}, "updates"
+        )
+        self.assertEqual(state_after_first["messages"], [first_message])
+
+        _, _, state_after_second = _normalize_stream_event(
+            {"sql_agent_llm": {"messages": [second_message]}}, state_after_first, "updates"
+        )
+
+        self.assertEqual(state_after_second["messages"], [first_message, second_message])
+
+    def test_normalize_stream_event_accumulates_messages_across_an_interrupt(self) -> None:
+        """The messages reducer must also survive an interrupt event in between."""
+        first_message = AIMessage(content="first")
+        _, _, state_after_first = _normalize_stream_event(
+            {"sql_agent_llm": {"messages": [first_message]}}, {}, "updates"
+        )
+
+        _, _, state_after_interrupt = _normalize_stream_event(
+            {INTERRUPT_EVENT: [Interrupt({"kind": "clarification"})]},
+            state_after_first,
+            "updates",
+        )
+
+        self.assertEqual(state_after_interrupt["messages"], [first_message])
+
 
 class TestSummarizeStepOutcome(unittest.TestCase):
     """Test the _summarize_step_outcome function."""
@@ -205,16 +251,64 @@ class TestSummarizeStepOutcome(unittest.TestCase):
         result = _summarize_step_outcome({"interrupt": {"draft": "DELETE"}})
         self.assertEqual(result, "execution_pending_approval")
 
+    def test_summarize_awaiting_clarification(self) -> None:
+        """A clarification-kind interrupt should be distinguished from a modification approval."""
+        result = _summarize_step_outcome(
+            {"interrupt": {"kind": "clarification", "questions": []}}
+        )
+        self.assertEqual(result, "awaiting_clarification")
+
+    def test_summarize_agent_repairing(self) -> None:
+        """The executor's repair-pass update should be labeled distinctly from a plain failure."""
+        result = _summarize_step_outcome(
+            {"execution_error": "no such table", "agent_status": "repairing"}
+        )
+        self.assertEqual(result, "agent_repairing")
+
+    def test_summarize_agent_tool_call(self) -> None:
+        """A sql_agent_tools update (identified by probe_count) should be labeled distinctly."""
+        result = _summarize_step_outcome({"messages": [], "probe_count": 1})
+        self.assertEqual(result, "agent_tool_call")
+
+    def test_summarize_agent_thinking(self) -> None:
+        """A sql_agent_llm update under budget should be labeled agent_thinking."""
+        result = _summarize_step_outcome(
+            {"messages": [], "agent_iterations": 1},
+            {"agent_iterations": 1, "intent": "query"},
+        )
+        self.assertEqual(result, "agent_thinking")
+
+    def test_summarize_agent_thinking_without_state_defaults_safely(self) -> None:
+        """Without the optional state argument, this should not crash and stay agent_thinking."""
+        result = _summarize_step_outcome({"messages": [], "agent_iterations": 1})
+        self.assertEqual(result, "agent_thinking")
+
+    def test_summarize_agent_budget_exhausted(self) -> None:
+        """Once agent_iterations reaches the intent-scoped cap, label it distinctly."""
+        result = _summarize_step_outcome(
+            {"messages": [], "agent_iterations": DEFAULT_MAX_AGENT_ITERATIONS_QUERY},
+            {"agent_iterations": DEFAULT_MAX_AGENT_ITERATIONS_QUERY, "intent": "query"},
+        )
+        self.assertEqual(result, "agent_budget_exhausted")
+
+    def test_summarize_agent_budget_exhausted_node_output(self) -> None:
+        """SQLAgentBudgetExhaustedNode's own update (agent_status) must be labeled too,
+        independent of the agent_iterations heuristic above."""
+        result = _summarize_step_outcome(
+            {"agent_status": "budget_exhausted", "analysis": "I could not finish."}
+        )
+        self.assertEqual(result, "agent_budget_exhausted")
+
 
 class RetryRoutingTestCase(unittest.TestCase):
-    """Test retry boundaries and fallback failure routing."""
+    """Test retry boundaries at the executor -> agent loop-back (D6)."""
 
-    def test_execution_failure_routes_to_regenerator_below_retry_limit(self) -> None:
+    def test_execution_failure_routes_back_to_agent_llm_below_retry_limit(self) -> None:
         route = _route_after_executor(
             {"execution_error": "failed", "retry_count": 2, "max_retries": 3}
         )
 
-        self.assertEqual(route, NODE_SQL_FALLBACK_REGENERATOR)
+        self.assertEqual(route, NODE_SQL_AGENT_LLM)
 
     def test_execution_failure_aborts_at_retry_limit(self) -> None:
         route = _route_after_executor(
@@ -226,12 +320,142 @@ class RetryRoutingTestCase(unittest.TestCase):
     def test_successful_execution_routes_to_result_analysis(self) -> None:
         self.assertEqual(_route_after_executor({"execution_error": None}), NODE_RESULT_ANALYST)
 
-    def test_regeneration_failure_aborts_without_reexecuting_failed_sql(self) -> None:
-        route = _route_from_fallback_regenerator(
-            {"regeneration_error": "model returned no SQL", "intent": "modification"}
+
+class RouteAfterAgentLLMTestCase(unittest.TestCase):
+    """Test should_continue, extended with budget enforcement and the clarify split (D3/D5)."""
+
+    def test_no_tool_calls_routes_to_finalize(self) -> None:
+        message = AIMessage(content="SELECT 1", tool_calls=[])
+        route = _route_after_agent_llm({"messages": [message], "agent_iterations": 1})
+
+        self.assertEqual(route, NODE_SQL_AGENT_FINALIZE)
+
+    def test_lone_ask_user_call_routes_to_clarify(self) -> None:
+        message = AIMessage(
+            content="",
+            tool_calls=[{"name": "ask_user", "args": {"questions": []}, "id": "c1"}],
+        )
+        route = _route_after_agent_llm({"messages": [message], "agent_iterations": 1})
+
+        self.assertEqual(route, NODE_SQL_AGENT_CLARIFY)
+
+    def test_other_tool_calls_route_to_tools(self) -> None:
+        message = AIMessage(
+            content="", tool_calls=[{"name": "inspect_schema", "args": {}, "id": "c1"}]
+        )
+        route = _route_after_agent_llm({"messages": [message], "agent_iterations": 1})
+
+        self.assertEqual(route, NODE_SQL_AGENT_TOOLS)
+
+    def test_mixed_batch_including_ask_user_routes_to_tools_not_clarify(self) -> None:
+        """Only a *lone* ask_user call goes to clarify (D3); a mixed batch is rejected in tools."""
+        message = AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "ask_user", "args": {"questions": []}, "id": "c1"},
+                {"name": "inspect_schema", "args": {}, "id": "c2"},
+            ],
+        )
+        route = _route_after_agent_llm({"messages": [message], "agent_iterations": 1})
+
+        self.assertEqual(route, NODE_SQL_AGENT_TOOLS)
+
+    def test_budget_exceeded_routes_to_explanation_for_query_intent(self) -> None:
+        """A turn still requesting tools past the query cap explains itself instead of aborting silently."""
+        message = AIMessage(
+            content="", tool_calls=[{"name": "inspect_schema", "args": {}, "id": "c1"}]
+        )
+        route = _route_after_agent_llm(
+            {
+                "messages": [message],
+                "agent_iterations": DEFAULT_MAX_AGENT_ITERATIONS_QUERY,
+                "intent": "query",
+            }
         )
 
+        self.assertEqual(route, NODE_SQL_AGENT_BUDGET_EXHAUSTED)
+
+    def test_budget_exceeded_routes_to_explanation_for_modification_intent(self) -> None:
+        """Same budget enforcement, scoped to the modification intent's higher cap."""
+        message = AIMessage(
+            content="", tool_calls=[{"name": "inspect_schema", "args": {}, "id": "c1"}]
+        )
+        route = _route_after_agent_llm(
+            {
+                "messages": [message],
+                "agent_iterations": DEFAULT_MAX_AGENT_ITERATIONS_MODIFICATION,
+                "intent": "modification",
+            }
+        )
+
+        self.assertEqual(route, NODE_SQL_AGENT_BUDGET_EXHAUSTED)
+
+    def test_explicit_budget_overrides_intent_scoped_default(self) -> None:
+        message = AIMessage(
+            content="", tool_calls=[{"name": "inspect_schema", "args": {}, "id": "c1"}]
+        )
+        route = _route_after_agent_llm(
+            {
+                "messages": [message],
+                "agent_iterations": 2,
+                "intent": "query",
+                "max_agent_iterations": 2,
+            }
+        )
+
+        self.assertEqual(route, NODE_SQL_AGENT_BUDGET_EXHAUSTED)
+
+    def test_clean_finalize_on_last_allowed_iteration_is_not_aborted(self) -> None:
+        """A turn with no tool calls left must always reach finalize, even at/over the cap."""
+        message = AIMessage(content="SELECT 1", tool_calls=[])
+        route = _route_after_agent_llm(
+            {
+                "messages": [message],
+                "agent_iterations": DEFAULT_MAX_AGENT_ITERATIONS_QUERY,
+                "intent": "query",
+            }
+        )
+
+        self.assertEqual(route, NODE_SQL_AGENT_FINALIZE)
+
+    def test_under_budget_does_not_abort(self) -> None:
+        message = AIMessage(content="SELECT 1", tool_calls=[])
+        route = _route_after_agent_llm(
+            {"messages": [message], "agent_iterations": 1, "intent": "modification"}
+        )
+
+        self.assertEqual(route, NODE_SQL_AGENT_FINALIZE)
+
+
+class RouteAfterClarifyTestCase(unittest.TestCase):
+    """Test the router following the human-input node."""
+
+    def test_cancelled_status_aborts(self) -> None:
+        self.assertEqual(_route_after_clarify({"agent_status": "cancelled"}), ROUTE_ABORT)
+
+    def test_non_cancelled_status_routes_back_to_agent_llm(self) -> None:
+        self.assertEqual(
+            _route_after_clarify({"agent_status": None}), NODE_SQL_AGENT_LLM
+        )
+
+
+class RouteAfterFinalizeTestCase(unittest.TestCase):
+    """Test the router following SQL extraction (old _route_after_generation, moved)."""
+
+    def test_failed_status_aborts(self) -> None:
+        route = _route_after_finalize({"agent_status": "failed", "intent": "query"})
+
         self.assertEqual(route, ROUTE_ABORT)
+
+    def test_query_intent_routes_to_sql_validator(self) -> None:
+        route = _route_after_finalize({"agent_status": "final", "intent": "query"})
+
+        self.assertEqual(route, NODE_SQL_VALIDATOR)
+
+    def test_modification_intent_routes_to_modification_validator(self) -> None:
+        route = _route_after_finalize({"agent_status": "final", "intent": "modification"})
+
+        self.assertEqual(route, NODE_MODIFICATION_VALIDATOR)
 
 
 class FakeResponseTestCase(unittest.TestCase):
@@ -354,19 +578,25 @@ class FakeModel:
         return FakeResponse(self.response)
 
 
-class RepairingModel:
-    """Generate invalid initial SQL and repair it from fallback context."""
+class ScriptedChatModel:
+    """Fake tool-calling chat model: bind_tools returns self, invoke pops a scripted reply."""
 
-    def __init__(self) -> None:
-        self.fallback_prompt = ""
+    def __init__(self, responses: list[AIMessage]) -> None:
+        self._responses = list(responses)
+        self.bound_tools: list[object] | None = None
+        self.invocations: list[list[object]] = []
 
-    def invoke(self, prompt: str) -> str:
-        if "authoritative repair target" in prompt:
-            self.fallback_prompt = prompt
-            if "'Suikon Blaz AD'" in prompt:
-                return "INSERT INTO Artist (Name) VALUES ('Suikon Blaz AD');"
-            return "INSERT INTO Artist (Name) VALUES ('Mandyspie');"
-        return "INSERT INTO Artists (Name) VALUES ('Mandyspie');"
+    def bind_tools(self, tools: list[object]) -> "ScriptedChatModel":
+        """Record the bound tools and return self, like a real bind_tools call."""
+        self.bound_tools = list(tools)
+        return self
+
+    def invoke(self, messages: list[object]) -> AIMessage:
+        """Record the messages sent and pop the next scripted response."""
+        self.invocations.append(list(messages))
+        if not self._responses:
+            raise AssertionError("ScriptedChatModel ran out of scripted responses")
+        return self._responses.pop(0)
 
 
 class FakeCompiledGraph:
@@ -486,8 +716,8 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph
 
         graph = build_sql_agent_graph(
-            FakeModel("DELETE FROM Artist"),
-            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+            agent_model=ScriptedChatModel([AIMessage(content="DELETE FROM Artist")]),
+            database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
             intent_model=FakeModel('{"intent": "query"}'),
             selected_database=SQLiteDatabase(),
         )
@@ -501,8 +731,8 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph
 
         graph = build_sql_agent_graph(
-            FakeModel("SELECT * FROM Artist"),
-            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+            agent_model=ScriptedChatModel([AIMessage(content="SELECT * FROM Artist")]),
+            database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
             intent_model=FakeModel('{"intent": "query"}'),
             selected_database=SQLiteDatabase(),
         )
@@ -513,6 +743,79 @@ class SQLGraphTestCase(unittest.TestCase):
         self.assertIn("query_result", result)
         self.assertIsNone(result.get("execution_error"))
         self.assertIsNotNone(result["query_result"])
+
+    def test_agent_reaches_executor_after_one_question_and_one_answer(self) -> None:
+        """End-to-end: a scripted model asks one clarifying question, is answered, and
+        reaches sql_executor (Step 6's Done-when scenario)."""
+        from graph import build_sql_agent_graph
+
+        model = ScriptedChatModel(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "ask_user",
+                            "args": {
+                                "questions": [
+                                    {
+                                        "key": "artist_name",
+                                        "question": "What name should the new artist have?",
+                                        "why": "The INSERT needs a value for the required Name column.",
+                                    }
+                                ]
+                            },
+                            "id": "call-1",
+                        }
+                    ],
+                ),
+                AIMessage(content="INSERT INTO Artist (Name) VALUES ('Mandyspie')"),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "agent_reaches_executor.sqlite"
+            with sqlite3.connect(database_path) as connection:
+                connection.execute(
+                    "CREATE TABLE Artist (ArtistId INTEGER PRIMARY KEY, Name TEXT)"
+                )
+
+            graph = build_sql_agent_graph(
+                agent_model=model,
+                database_checker_model=FakeModel(
+                    '{"match": true, "database": "music", "reason": "Matches question"}'
+                ),
+                intent_model=FakeModel('{"intent": "modification"}'),
+                selected_database=SQLiteDatabase(database_path),
+            )
+            config = build_thread_config()
+
+            paused = graph.invoke(
+                {"question": "Add a new artist", "user_role": "admin"}, config=config
+            )
+            self.assertIn("__interrupt__", paused)
+            clarification_payload = paused["__interrupt__"][0].value
+            self.assertEqual(clarification_payload["kind"], "clarification")
+
+            answered = graph.invoke(
+                Command(
+                    resume={
+                        "decision": "answer",
+                        "answers": [{"key": "artist_name", "answer": "Mandyspie"}],
+                    }
+                ),
+                config=config,
+            )
+
+            # The corrected/final SQL now needs modification approval (sql_executor is next).
+            self.assertIn("__interrupt__", answered)
+            approval_payload = answered["__interrupt__"][0].value
+            self.assertEqual(
+                approval_payload["draft"], "INSERT INTO Artist (Name) VALUES ('Mandyspie')"
+            )
+
+            executed = graph.invoke(Command(resume="approve"), config=config)
+            self.assertIn("query_result", executed)
+            self.assertIsNone(executed.get("execution_error"))
 
     def test_failed_modification_is_regenerated_and_requires_new_approval(self) -> None:
         """A repaired modification must pause again before the corrected SQL executes."""
@@ -525,10 +828,20 @@ class SQLGraphTestCase(unittest.TestCase):
                     "CREATE TABLE Artist (ArtistId INTEGER PRIMARY KEY, Name TEXT)"
                 )
 
-            model = RepairingModel()
+            model = ScriptedChatModel(
+                [
+                    AIMessage(content="INSERT INTO Artists (Name) VALUES ('Mandyspie');"),
+                    AIMessage(
+                        content=(
+                            "INSERT INTO Artist (Name) VALUES ('Suikon Blaz AD');\n\n"
+                            "Rationale: rewrote the statement to use the correct table name."
+                        )
+                    ),
+                ]
+            )
             graph = build_sql_agent_graph(
-                model,
-                selector_model=FakeModel(
+                agent_model=model,
+                database_checker_model=FakeModel(
                     '{"match": true, "database": "music", "reason": "Matches question"}'
                 ),
                 intent_model=FakeModel('{"intent": "modification"}'),
@@ -564,7 +877,7 @@ class SQLGraphTestCase(unittest.TestCase):
             )
             self.assertIn("no such table: Artists", retry_payload["previous_error"])
             self.assertIn(
-                "rewrote the statement",
+                "correct table name",
                 retry_payload["regeneration_explanation"],
             )
             retry_state = graph.get_state(config).values
@@ -573,7 +886,8 @@ class SQLGraphTestCase(unittest.TestCase):
                 retry_state["generated_sql"],
                 "INSERT INTO Artist (Name) VALUES ('Suikon Blaz AD');",
             )
-            self.assertIn("no such table: Artists", model.fallback_prompt)
+            # The repair turn's transcript must include the executor's failure report.
+            self.assertIn("no such table: Artists", str(model.invocations[1]))
 
             graph.invoke(Command(resume="approve"), config=config)
             final_state = graph.get_state(config).values
@@ -590,8 +904,8 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph
 
         graph = build_sql_agent_graph(
-            FakeModel("SELECT Name FROM Artist"),
-            selector_model=FakeModel(
+            agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
+            database_checker_model=FakeModel(
                 '{"match": false, "database": "", "reason": "No configured database matches."}'
             ),
             selected_database=SQLiteDatabase(),
@@ -608,8 +922,8 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph
 
         graph = build_sql_agent_graph(
-            FakeModel("SELECT Name FROM Artist"),
-            selector_model=FakeModel(
+            agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
+            database_checker_model=FakeModel(
                 '{"match": false, "database": "", "reason": "Question does not relate to database."}'
             ),
             selected_database=SQLiteDatabase(),
@@ -626,48 +940,10 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph, stream_sql_agent_execution
 
         graph = build_sql_agent_graph(
-            FakeModel('SELECT Name FROM Artist WHERE ArtistId = 1'),
-            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
-            intent_model=FakeModel('{"intent": "query"}'),
-            selected_database=SQLiteDatabase(),
-        )
-
-        steps = list(stream_sql_agent_execution(graph, {"question": "Who is artist 1?"}))
-
-        self.assertEqual(
-            [step["node"] for step in steps],
-            ["database_checker", "intent_classifier", "sql_generator", "sql_validator", "sql_executor", "result_analyst"],
-        )
-        self.assertEqual(steps[0]["outcome"], "database_checked")
-        self.assertEqual(steps[1]["outcome"], "Intention classified")
-        self.assertEqual(steps[2]["outcome"], "sql_generated")
-        self.assertEqual(steps[-1]["outcome"], "analysis_ready")
-        self.assertEqual(steps[-1]["state"]["analysis"][:8], "Returned")
-
-    def test_build_graph_stops_when_intent_is_modification(self) -> None:
-        """Questions that intent to modify should abort before SQL generation."""
-        from graph import build_sql_agent_graph
-
-        graph = build_sql_agent_graph(
-            FakeModel('{"intent": "modification"}'),
-            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
-            selected_database=SQLiteDatabase(),
-        )
-        result = graph.invoke(
-            {"question": "Delete all artists"},
-            config=build_thread_config(),
-        )
-        self.assertIn("authorization_error", result)
-        self.assertEqual(result["intent"], "modification")
-        self.assertNotIn("generated_sql", result)
-
-    def test_stream_sql_agent_execution_with_intent_classifier(self) -> None:
-        """Streaming should expose intent_classifier after database_selector."""
-        from graph import build_sql_agent_graph, stream_sql_agent_execution
-
-        graph = build_sql_agent_graph(
-            FakeModel('SELECT Name FROM Artist WHERE ArtistId = 1'),
-            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+            agent_model=ScriptedChatModel(
+                [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId = 1")]
+            ),
+            database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
             intent_model=FakeModel('{"intent": "query"}'),
             selected_database=SQLiteDatabase(),
         )
@@ -679,7 +955,60 @@ class SQLGraphTestCase(unittest.TestCase):
             [
                 "database_checker",
                 "intent_classifier",
-                "sql_generator",
+                "sql_agent_llm",
+                "sql_agent_finalize",
+                "sql_validator",
+                "sql_executor",
+                "result_analyst",
+            ],
+        )
+        self.assertEqual(steps[0]["outcome"], "database_checked")
+        self.assertEqual(steps[1]["outcome"], "Intention classified")
+        self.assertEqual(steps[2]["outcome"], "agent_thinking")
+        self.assertEqual(steps[3]["outcome"], "sql_generated")
+        self.assertEqual(steps[-1]["outcome"], "analysis_ready")
+        self.assertEqual(steps[-1]["state"]["analysis"][:8], "Returned")
+
+    def test_build_graph_stops_when_intent_is_modification(self) -> None:
+        """Questions that intent to modify should abort before SQL generation."""
+        from graph import build_sql_agent_graph
+
+        graph = build_sql_agent_graph(
+            agent_model=ScriptedChatModel([AIMessage(content="DELETE FROM Artist")]),
+            database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+            intent_model=FakeModel('{"intent": "modification"}'),
+            selected_database=SQLiteDatabase(),
+        )
+        result = graph.invoke(
+            {"question": "Delete all artists"},
+            config=build_thread_config(),
+        )
+        self.assertIn("authorization_error", result)
+        self.assertEqual(result["intent"], "modification")
+        self.assertNotIn("generated_sql", result)
+
+    def test_stream_sql_agent_execution_with_intent_classifier(self) -> None:
+        """Streaming should expose intent_classifier after database_checker."""
+        from graph import build_sql_agent_graph, stream_sql_agent_execution
+
+        graph = build_sql_agent_graph(
+            agent_model=ScriptedChatModel(
+                [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId = 1")]
+            ),
+            database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+            intent_model=FakeModel('{"intent": "query"}'),
+            selected_database=SQLiteDatabase(),
+        )
+
+        steps = list(stream_sql_agent_execution(graph, {"question": "Who is artist 1?"}))
+
+        self.assertEqual(
+            [step["node"] for step in steps],
+            [
+                "database_checker",
+                "intent_classifier",
+                "sql_agent_llm",
+                "sql_agent_finalize",
                 "sql_validator",
                 "sql_executor",
                 "result_analyst",
@@ -695,6 +1024,9 @@ class SQLGraphTestCase(unittest.TestCase):
 
         graph = build_sql_agent_graph(
             FakeModel("SELECT Name FROM Artist WHERE ArtistId = 1"),
+            agent_model=ScriptedChatModel(
+                [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId = 1")]
+            ),
             selected_database=SQLiteDatabase(),
         )
 

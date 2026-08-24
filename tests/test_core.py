@@ -15,8 +15,9 @@ for parent in Path(__file__).resolve().parents:
         sys.path.insert(0, str(parent / "src"))
         break
 
+from langchain_core.messages import AIMessage
 from langgraph.types import Interrupt
-from tools.database import DatabaseError, SQLiteDatabase
+from tools.database import SQLiteDatabase
 from core import (
     PendingApprovalSession,
     answer_question,
@@ -31,7 +32,6 @@ from core import (
     _serialize_query_result,
     _serialize_state,
 )
-from tests.test_db.helpers import fixture_registered_database
 
 
 class FakeResponse:
@@ -51,6 +51,27 @@ class FakeModel:
     def invoke(self, prompt: str) -> FakeResponse:
         self.prompts.append(prompt)
         return FakeResponse(self.response)
+
+
+class ScriptedChatModel:
+    """Fake tool-calling chat model: bind_tools returns self, invoke pops a scripted reply."""
+
+    def __init__(self, responses: list[AIMessage]) -> None:
+        self._responses = list(responses)
+        self.bound_tools: list[object] | None = None
+        self.invocations: list[list[object]] = []
+
+    def bind_tools(self, tools: list[object]) -> "ScriptedChatModel":
+        """Record the bound tools and return self, like a real bind_tools call."""
+        self.bound_tools = list(tools)
+        return self
+
+    def invoke(self, messages: list[object]) -> AIMessage:
+        """Record the messages sent and pop the next scripted response."""
+        self.invocations.append(list(messages))
+        if not self._responses:
+            raise AssertionError("ScriptedChatModel ran out of scripted responses")
+        return self._responses.pop(0)
 
 
 class FakeCommand:
@@ -97,6 +118,30 @@ class FakeApprovalGraph:
         if self.phase == "resume":
             return self.resume_snapshot
         return self.start_snapshot
+
+
+class SequentialFakeGraph:
+    """Graph double returning a scripted (result, snapshot) pair per invoke() call.
+
+    Unlike FakeApprovalGraph, phases are not inferred from the input (a single
+    "resume" phase cannot tell two different resumes apart); each invoke() call
+    simply advances to the next scripted step, which is what a multi-interrupt
+    round trip (clarify, then approve) needs.
+    """
+
+    def __init__(self, steps: list[tuple[object, SimpleNamespace]]) -> None:
+        self._steps = list(steps)
+        self._current_snapshot = self._steps[0][1] if self._steps else None
+
+    def invoke(self, state: object, config: dict[str, object] | None = None) -> object:
+        del state, config
+        result, snapshot = self._steps.pop(0)
+        self._current_snapshot = snapshot
+        return result
+
+    def get_state(self, config: dict[str, object]) -> SimpleNamespace:
+        del config
+        return self._current_snapshot
 
 
 class FakeCompiledGraph:
@@ -206,19 +251,19 @@ class CoreTestCase(unittest.TestCase):
     def test_answer_question_runs_full_pipeline(self) -> None:
         """Test that the answer_question function correctly orchestrates the full pipeline from question to analysis."""
         
-        # Mock the selector model to always match
-        selector_model = FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}')
-        
-        generator_model = FakeModel(
-            "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
+        # The checker allows the request to continue into the agent workflow.
+        database_checker_model = FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}')
+
+        agent_model = ScriptedChatModel(
+            [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId")]
         )
         analyst_model = FakeModel("The first two artists are AC/DC and Accept.")
         intent_model = FakeModel('{"intent": "query"}')
         result = answer_question(
             question="What are the first two artists?",
-            sql_generator_model=generator_model,
+            agent_model=agent_model,
             analyst_model=analyst_model,
-            selector_model=selector_model,
+            database_checker_model=database_checker_model,
             intent_model=intent_model,
             selected_database=SQLiteDatabase(),
         )
@@ -239,13 +284,13 @@ class CoreTestCase(unittest.TestCase):
             "ORDER BY AlbumCount DESC "
             "LIMIT 5"
         )
-        selector_model = FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}')
+        database_checker_model = FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}')
         with tempfile.TemporaryDirectory() as temp_dir:
             result = answer_question(
                 question="Which 5 artists have the most albums ?",
-                sql_generator_model=FakeModel(sql_query),
+                agent_model=ScriptedChatModel([AIMessage(content=sql_query)]),
                 analyst_model=FakeModel("Top artists returned."),
-                selector_model=selector_model,
+                database_checker_model=database_checker_model,
                 intent_model=FakeModel('{"intent": "query"}'),
                 selected_database=SQLiteDatabase(),
                 include_trace=True,
@@ -263,8 +308,8 @@ class CoreTestCase(unittest.TestCase):
 
         result = answer_question(
             question="What will the weather be tomorrow?",
-            sql_generator_model=FakeModel("SELECT Name FROM Artist"),
-            selector_model=FakeModel(
+            agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
+            database_checker_model=FakeModel(
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
             ),
             intent_model=FakeModel('{"intent": "query"}'),
@@ -278,8 +323,8 @@ class CoreTestCase(unittest.TestCase):
 
         result = answer_question(
             question="What will the weather be tomorrow?",
-            sql_generator_model=FakeModel("SELECT Name FROM Artist"),
-            selector_model=FakeModel(
+            agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
+            database_checker_model=FakeModel(
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "This question is unrelated to the configured database."}'
             ),
             intent_model=FakeModel('{"intent": "query"}'),
@@ -292,8 +337,8 @@ class CoreTestCase(unittest.TestCase):
         """Readonly users should be blocked before SQL generation on modifications."""
         result = answer_question(
             question="Delete all artists",
-            sql_generator_model=FakeModel("DELETE FROM Artist"),
-            selector_model=FakeModel(
+            agent_model=ScriptedChatModel([AIMessage(content="DELETE FROM Artist")]),
+            database_checker_model=FakeModel(
                 '{"match": true, "database": "music", "candidate_databases": [], "reason": "Match found"}'
             ),
             intent_model=FakeModel('{"intent": "modification"}'),
@@ -309,11 +354,11 @@ class CoreTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             result = answer_question(
                 question="What are the first two artists?",
-                sql_generator_model=FakeModel(
-                    "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
+                agent_model=ScriptedChatModel(
+                    [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId")]
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
-                selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+                database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
                 intent_model=FakeModel('{"intent": "query"}'),
                 selected_database=SQLiteDatabase(),
                 include_trace=True,
@@ -332,11 +377,11 @@ class CoreTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             result = answer_question(
                 question="What are the first two artists?",
-                sql_generator_model=FakeModel(
-                    "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
+                agent_model=ScriptedChatModel(
+                    [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId")]
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
-                selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+                database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
                 intent_model=FakeModel('{"intent": "query"}'),
                 selected_database=SQLiteDatabase(),
                 include_trace=True,
@@ -358,8 +403,11 @@ class CoreTestCase(unittest.TestCase):
 
         result = answer_question(
             question="What are the first two artists?",
-            sql_generator_model=FakeModel(
-                "SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId"
+            database_checker_model=FakeModel(
+                '{"match": true, "database": "chinook", "reason": "Matches question"}'
+            ),
+            agent_model=ScriptedChatModel(
+                [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId")]
             ),
             analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
             selected_database=SQLiteDatabase(),
@@ -374,8 +422,8 @@ class CoreTestCase(unittest.TestCase):
         steps = list(
             stream_question(
                 question="Delete all artists",
-                sql_generator_model=FakeModel("DELETE FROM Artist"),
-                selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+                agent_model=ScriptedChatModel([AIMessage(content="DELETE FROM Artist")]),
+                database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
                 intent_model=FakeModel('{"intent": "modification"}'),
                 selected_database=SQLiteDatabase(),
             )
@@ -393,8 +441,8 @@ class CoreTestCase(unittest.TestCase):
         steps = list(
             stream_question(
                 question="What will the weather be tomorrow?",
-                sql_generator_model=FakeModel("SELECT Name FROM Artist"),
-                selector_model=FakeModel(
+                agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
+                database_checker_model=FakeModel(
                     '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
                 ),
                 selected_database=SQLiteDatabase(),
@@ -408,15 +456,18 @@ class CoreTestCase(unittest.TestCase):
     def test_stream_question_exposes_execution_steps(self) -> None:
         """Streaming should expose each execution step with node name, update, and outcome."""
 
-        generator_model = FakeModel(
-            "SELECT Name FROM Artist WHERE ArtistId = 1"
+        agent_model = ScriptedChatModel(
+            [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId = 1")]
         )
         analyst_model = FakeModel("The first artist is AC/DC.")
 
         steps = list(
             stream_question(
                 question="Who is the first artist?",
-                sql_generator_model=generator_model,
+                database_checker_model=FakeModel(
+                    '{"match": true, "database": "chinook", "reason": "Matches question"}'
+                ),
+                agent_model=agent_model,
                 analyst_model=analyst_model,
                 intent_model=FakeModel('{"intent": "query"}'),
                 selected_database=SQLiteDatabase(),
@@ -538,7 +589,10 @@ class CoreTestCase(unittest.TestCase):
         with patch("core.build_sql_agent_graph", return_value=fake_graph):
             result = start_question(
                 question="Delete artist 1",
-                sql_generator_model=FakeModel("DELETE FROM Artist WHERE ArtistId = 1"),
+                database_checker_model=FakeModel("unused by mocked graph"),
+                agent_model=ScriptedChatModel(
+                    [AIMessage(content="DELETE FROM Artist WHERE ArtistId = 1")]
+                ),
                 user_role="admin",
                 user_sub="user-1",
                 pending_approval_sessions=pending_sessions,
@@ -686,6 +740,158 @@ class CoreTestCase(unittest.TestCase):
                 user_sub="user-2",
             )
         self.assertIn("No pending approval found for this user", str(context.exception))
+
+    def test_resume_question_answer_decision_sends_dict_resume_payload(self) -> None:
+        """An 'answer' resume should send {decision, answers} as the resume payload."""
+        fake_graph = FakeApprovalGraph(
+            start_result={},
+            start_snapshot=SimpleNamespace(values={}, interrupts=[]),
+            resume_result={},
+            resume_snapshot=SimpleNamespace(
+                values={"question": "add a new artist called X", "agent_status": "final"},
+                interrupts=[],
+            ),
+        )
+        pending_sessions: dict[str, PendingApprovalSession] = {
+            "thread-1": PendingApprovalSession(
+                graph=fake_graph,
+                question="add a new artist called X",
+                user_sub="user-1",
+            )
+        }
+        captured: dict[str, object] = {}
+
+        def fake_command(*, resume: object, update: dict | None = None) -> SimpleNamespace:
+            captured["resume"] = resume
+            return SimpleNamespace(resume=resume, update=update)
+
+        with patch("core.Command", fake_command):
+            result = resume_question(
+                "thread-1",
+                "answer",
+                answers=[{"key": "add_albums", "answer": "yes"}],
+                pending_approval_sessions=pending_sessions,
+                user_sub="user-1",
+            )
+
+        self.assertEqual(
+            captured["resume"],
+            {"decision": "answer", "answers": [{"key": "add_albums", "answer": "yes"}]},
+        )
+        self.assertEqual(result["agent_status"], "final")
+
+    def test_resume_question_cancel_decision_sends_dict_resume_payload(self) -> None:
+        """A 'cancel' resume should send {decision: 'cancel', answers: []}, no answers required."""
+        fake_graph = FakeApprovalGraph(
+            start_result={},
+            start_snapshot=SimpleNamespace(values={}, interrupts=[]),
+            resume_result={},
+            resume_snapshot=SimpleNamespace(
+                values={"question": "add a new artist called X", "agent_status": "cancelled"},
+                interrupts=[],
+            ),
+        )
+        pending_sessions: dict[str, PendingApprovalSession] = {
+            "thread-1": PendingApprovalSession(
+                graph=fake_graph,
+                question="add a new artist called X",
+                user_sub="user-1",
+            )
+        }
+        captured: dict[str, object] = {}
+
+        def fake_command(*, resume: object, update: dict | None = None) -> SimpleNamespace:
+            captured["resume"] = resume
+            return SimpleNamespace(resume=resume, update=update)
+
+        with patch("core.Command", fake_command):
+            resume_question(
+                "thread-1",
+                "cancel",
+                pending_approval_sessions=pending_sessions,
+                user_sub="user-1",
+            )
+
+        self.assertEqual(captured["resume"], {"decision": "cancel", "answers": []})
+
+    def test_start_then_resume_handles_clarify_then_approve_two_interrupt_run(self) -> None:
+        """Full round trip: start pauses for clarification, answering pauses for
+        modification approval, and approving completes execution."""
+        clarify_interrupt = Interrupt(
+            {"kind": "clarification", "questions": [{"key": "add_albums", "question": "Add albums too?"}]}
+        )
+        approval_interrupt = Interrupt(
+            {"kind": "modification_approval", "draft": "INSERT INTO Artist (Name) VALUES ('X')"}
+        )
+
+        fake_graph = SequentialFakeGraph(
+            [
+                (
+                    {"__interrupt__": [clarify_interrupt]},
+                    SimpleNamespace(
+                        values={"question": "add a new artist called X", "intent": "modification"},
+                        interrupts=[clarify_interrupt],
+                    ),
+                ),
+                (
+                    {"__interrupt__": [approval_interrupt]},
+                    SimpleNamespace(
+                        values={"question": "add a new artist called X", "intent": "modification"},
+                        interrupts=[approval_interrupt],
+                    ),
+                ),
+                (
+                    {},
+                    SimpleNamespace(
+                        values={
+                            "question": "add a new artist called X",
+                            "intent": "modification",
+                            "execution_confirmed": True,
+                            "agent_status": "final",
+                        },
+                        interrupts=[],
+                    ),
+                ),
+            ]
+        )
+        pending_sessions: dict[str, PendingApprovalSession] = {}
+
+        with patch("core.build_sql_agent_graph", return_value=fake_graph):
+            started = start_question(
+                question="add a new artist called X",
+                database_checker_model=FakeModel("unused by mocked graph"),
+                agent_model=ScriptedChatModel(
+                    [AIMessage(content="INSERT INTO Artist (Name) VALUES ('X')")]
+                ),
+                user_role="admin",
+                user_sub="user-1",
+                pending_approval_sessions=pending_sessions,
+            )
+
+        thread_id = started["thread_id"]
+        self.assertEqual(started["interrupt"]["kind"], "clarification")
+        self.assertIn(thread_id, pending_sessions)
+
+        with patch("core.Command", FakeResumeCommand):
+            after_answer = resume_question(
+                thread_id,
+                "answer",
+                answers=[{"key": "add_albums", "answer": "no"}],
+                pending_approval_sessions=pending_sessions,
+                user_sub="user-1",
+            )
+        self.assertEqual(after_answer["interrupt"]["kind"], "modification_approval")
+        self.assertIn(thread_id, pending_sessions)
+
+        with patch("core.Command", FakeResumeCommand):
+            after_approve = resume_question(
+                thread_id,
+                "approve",
+                pending_approval_sessions=pending_sessions,
+                user_sub="user-1",
+            )
+        self.assertTrue(after_approve["execution_confirmed"])
+        self.assertNotIn(thread_id, pending_sessions)
 
 
 class FakeResponseTestCase(unittest.TestCase):

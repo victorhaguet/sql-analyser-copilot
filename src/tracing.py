@@ -14,6 +14,7 @@ from graph import SQLAgentTraceStep
 
 TRACE_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 TRACE_HEADER_WIDTH = 80
+TRACE_MAX_RESULT_LINES = 20
 
 
 def format_trace_header(title: str) -> str:
@@ -51,6 +52,44 @@ def format_trace_payload(payload: Any) -> str:
         ]
         return "\n".join(summary)
     return json.dumps(payload, indent=2, ensure_ascii=True, default=str)
+
+
+def truncate_trace_lines(text: str, max_lines: int = TRACE_MAX_RESULT_LINES) -> str:
+    """Cap a tool result to ~20 lines so one wide probe doesn't drown the trace.
+
+    Probe results are rendered as `N row(s)\\nheader\\nrow1\\nrow2\\n...`, so
+    capping by line count (rather than character count) keeps roughly the
+    header plus the first ~19 data rows — proportional to how large the
+    result actually is, unlike a flat character cutoff.
+
+    Args:
+        text: The raw tool result text.
+        max_lines: Maximum number of lines to keep before truncating.
+
+    Returns:
+        str: The text unchanged if short enough, otherwise the first
+        `max_lines` lines plus a note of how many more were cut.
+    """
+    lines = text.splitlines()
+    if len(lines) <= max_lines:
+        return text
+    shown = lines[:max_lines]
+    shown.append(f"... [{len(lines) - max_lines} more line(s) truncated]")
+    return "\n".join(shown)
+
+
+def _format_tool_call(tool_call: dict[str, Any]) -> str:
+    """Render one requested tool call as `name(arg=value, ...)`.
+
+    Args:
+        tool_call: A LangChain `ToolCall` dict (`name`, `args`, `id`).
+
+    Returns:
+        str: A single-line, human-readable call signature.
+    """
+    args = tool_call.get("args") or {}
+    args_text = ", ".join(f"{key}={value!r}" for key, value in args.items())
+    return f"{tool_call.get('name', '?')}({args_text})"
 
 
 def format_trace_step(step: SQLAgentTraceStep) -> str:
@@ -103,31 +142,117 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
         body = "\n".join(lines)
         return f"{format_trace_header('Graph step')}\n{body}"
 
-    if node == "sql_generator":
-        body = "\n".join(
-            [
-                f"Node: {node}",
-                f"Outcome: {step['outcome']}",
-                update.get("generated_sql", ""),
-            ]
-        ).strip()
+    if node == "sql_agent_llm":
+        messages = update.get("messages") or []
+        ai_message = messages[-1] if messages else None
+        lines = [f"Node: {node}", f"Iteration: {update.get('agent_iterations', '?')}"]
+        text = str(getattr(ai_message, "content", "") or "").strip()
+        if text:
+            lines.append(f"Model text: {text}")
+        tool_calls = getattr(ai_message, "tool_calls", None) or []
+        if tool_calls:
+            lines.append(f"Tool calls requested ({len(tool_calls)}):")
+            lines.extend(f"  - {_format_tool_call(call)}" for call in tool_calls)
+        else:
+            lines.append("Tool calls requested: (none - ready to finalize)")
+        body = "\n".join(lines)
         return f"{format_trace_header('Graph step')}\n{body}"
-    
+
+    if node == "sql_agent_tools":
+        lines = [f"Node: {node}"]
+        tool_messages = update.get("messages") or []
+        if not tool_messages:
+            lines.append("(no tool calls executed)")
+        for tool_message in tool_messages:
+            name = getattr(tool_message, "name", "tool")
+            content = truncate_trace_lines(str(getattr(tool_message, "content", "")))
+            lines.append(f"- {name}: {content}")
+        body = "\n".join(lines)
+        return f"{format_trace_header('Graph step')}\n{body}"
+
+    if node == "sql_agent_clarify":
+        lines = [f"Node: {node}"]
+        if update.get("agent_status") == "cancelled":
+            lines.append("Outcome: clarification cancelled by user")
+            if update.get("execution_error"):
+                lines.append(f"Reason: {update['execution_error']}")
+        elif "clarification_answers" not in update:
+            # refused before interrupting, past the clarification cap.
+            lines.append("Outcome: clarification budget exhausted - told to proceed with assumptions")
+        else:
+            lines.append(
+                f"Outcome: answers received (round {update.get('clarification_rounds', '?')})"
+            )
+            for entry in update.get("clarification_answers") or []:
+                if isinstance(entry, dict):
+                    label = entry.get("question") or entry.get("key", "")
+                    lines.append(f"  - {label} -> {entry.get('answer', '')}")
+        body = "\n".join(lines)
+        return f"{format_trace_header('Graph step')}\n{body}"
+
+    if node == "sql_agent_finalize":
+        if update.get("agent_status") == "failed":
+            body = "\n".join(
+                [
+                    f"Node: {node}",
+                    "Outcome: failed to produce a valid SQL statement",
+                    f"Error: {update.get('agent_error', '')}",
+                ]
+            )
+            return f"{format_trace_header('Graph step')}\n{body}"
+
+        lines = [f"Node: {node}", "Outcome: final SQL produced"]
+        if state.get("retry_count", 0) > 0:
+            # Carries over what the retired sql_fallback_regenerator used to trace.
+            retry_count = state.get("retry_count", 0)
+            max_retries = state.get("max_retries", 3)
+            lines.append(f"Repair attempt: {retry_count} of {max_retries}")
+            if state.get("last_execution_error"):
+                lines.append(f"Previous Error: {state['last_execution_error']}")
+            if update.get("previous_sql"):
+                lines.extend(["Previous (failed) SQL:", str(update["previous_sql"])])
+        lines.extend(["Final SQL:", str(update.get("generated_sql", ""))])
+        if update.get("agent_rationale"):
+            lines.append(f"Rationale: {update['agent_rationale']}")
+        body = "\n".join(lines)
+        return f"{format_trace_header('Graph step')}\n{body}"
+
+    if node == "sql_agent_budget_exhausted":
+        lines = [
+            f"Node: {node}",
+            "Outcome: iteration budget exhausted before a final SQL statement was produced",
+            "Agent's explanation:",
+            str(update.get("analysis", "")),
+        ]
+        body = "\n".join(lines)
+        return f"{format_trace_header('Graph step')}\n{body}"
+
     if node == "__interrupt__":
         lines = [f"Node: {node}", f"Outcome: {step['outcome']}"]
-        interrupt_data = update.get("interrupt", {})
-        if interrupt_data:
+        interrupt_data = update.get("interrupt", {}) or {}
+        if interrupt_data.get("kind") == "clarification":
+            questions = interrupt_data.get("questions") or []
+            lines.append(f"Questions asked ({len(questions)}):")
+            for question in questions:
+                if not isinstance(question, dict):
+                    continue
+                lines.append(f"  - [{question.get('key', '?')}] {question.get('question', '')}")
+                if question.get("why"):
+                    lines.append(f"      why: {question['why']}")
+                if question.get("suggested_default"):
+                    lines.append(f"      suggested default: {question['suggested_default']}")
+        elif interrupt_data:
             request = interrupt_data.get("request", "")
             options = interrupt_data.get("options", [])
-    
+
             if request:
                 lines.append(f"Request: {request}")
             if options:
                 lines.append(f"Options: {options[0]}/{options[1]}")
-        
+
         body = "\n".join(lines)
         return f"{format_trace_header('Graph step')}\n{body}"
-    
+
     if node == "sql_modification_validator":
         lines = [f"Node: {node}", f"Outcome: {step['outcome']}"]
         if update.get("execution_confirmed") is not None:
@@ -152,40 +277,9 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
             f"{body}"
         )
     
-    if node == "sql_modification_validator":
-        lines = [f"Node: {node}", f"Outcome: {step['outcome']}"]
-        if update.get("execution_confirmed") is not None:
-            if update.get("execution_confirmed"):
-                lines.append("SQL query was approved")
-            else:
-                lines.append("SQL query was rejected")
-        body = "\n".join(lines)
-        return (
-            f"{format_trace_header('Tool Message')}\n"
-            f"Name: {node}\n\n"
-            f"{body}"
-        )
-
-    if node == "sql_fallback_regenerator":
-        parts = [
-            f"Outcome: {step['outcome']}",
-            f"Retry Count: {update.get('retry_count', state.get('retry_count', 0))}",
-        ]
-        previous_error = update.get("last_execution_error") or state.get("last_execution_error")
-        if previous_error:
-            parts.append(f"Previous Error: {previous_error}")
-        if update.get("regeneration_error"):
-            parts.append(f"Error: {update['regeneration_error']}")
-        elif update.get("generated_sql"):
-            parts.extend(["Regenerated SQL:", str(update["generated_sql"])])
-        return (
-            f"{format_trace_header('fallback_regeneration')}\n"
-            f"Name: {node}\n\n"
-            f"{chr(10).join(parts)}"
-        )
-
     if node == "sql_executor":
         parts = [f"Outcome: {step['outcome']}"]
+        is_repair_handoff = update.get("agent_status") == "repairing"
         if state.get("intent")=="query":
             if state.get("validated_sql"):
                 parts.extend(["SQL:", str(state.get("validated_sql"))])
@@ -193,6 +287,12 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
                 parts.append(format_trace_payload(update["query_result"]))
             elif update.get("execution_error"):
                 parts.append(f"Error: {update['execution_error']}")
+            if is_repair_handoff:
+                retry_count = update.get("retry_count", state.get("retry_count", 0))
+                max_retries = state.get("max_retries", 3)
+                parts.append(
+                    f"Handed back to the agent for repair (attempt {retry_count} of {max_retries})."
+                )
             return (
                 f"{format_trace_header('Tool Message')}\n"
                 f"Name: {node}\n\n"
@@ -205,6 +305,12 @@ def format_trace_step(step: SQLAgentTraceStep) -> str:
                 parts.append(f"Error: {update['execution_error']}")
             else:
                 parts.append("The SQL request was properly executed.")
+            if is_repair_handoff:
+                retry_count = update.get("retry_count", state.get("retry_count", 0))
+                max_retries = state.get("max_retries", 3)
+                parts.append(
+                    f"Handed back to the agent for repair (attempt {retry_count} of {max_retries})."
+                )
             return (
                 f"{format_trace_header('Tool Message')}\n"
                 f"Name: {node}\n\n"

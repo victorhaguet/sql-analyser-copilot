@@ -25,6 +25,9 @@ class ConfigTestCase(unittest.TestCase):
             "OPENAI_BASE_URL": None,
             "SQL_COPILOT_MODEL": None,
             "SQL_COPILOT_ANALYST_MODEL": None,
+            "SQL_COPILOT_INTENT_MODEL": None,
+            "SQL_COPILOT_AGENT_MODEL": None,
+            "SQL_COPILOT_AGENT_REASONING_EFFORT": None,
             "ENABLE_TRACE_LOGGING": None,
             "TRACE_LOG_DIR": None,
         }
@@ -118,6 +121,102 @@ class ConfigTestCase(unittest.TestCase):
         self.assertEqual(result[0].model, "gpt-4")
         self.assertEqual(result[1].model, "gpt-4")
         self.assertEqual(result[2].model, "gpt-4")
+
+    def test_load_models_from_env_reuses_identical_model_clients(self) -> None:
+        """Roles configured with the same model should share one stateless client."""
+        os.environ["OPENAI_API_KEY"] = "test-key"
+        os.environ["SQL_COPILOT_MODEL"] = "gpt-4"
+        os.environ.pop("SQL_COPILOT_ANALYST_MODEL", None)
+
+        checker_model, analyst_model, intent_model = config.load_models_from_env()
+
+        self.assertIs(checker_model, analyst_model)
+        self.assertIs(checker_model, intent_model)
+
+    def test_load_sql_agent_model_from_env_returns_none_when_no_api_key(self) -> None:
+        """Should return None when OPENAI_API_KEY is not set."""
+        os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("SQL_COPILOT_MODEL", None)
+
+        self.assertIsNone(config.load_sql_agent_model_from_env())
+
+    def test_load_sql_agent_model_from_env_returns_none_when_no_model_name(self) -> None:
+        """Should return None when neither SQL_COPILOT_AGENT_MODEL nor SQL_COPILOT_MODEL is set."""
+        os.environ["OPENAI_API_KEY"] = "test-key"
+        os.environ.pop("SQL_COPILOT_MODEL", None)
+        os.environ.pop("SQL_COPILOT_AGENT_MODEL", None)
+
+        self.assertIsNone(config.load_sql_agent_model_from_env())
+
+    def test_load_sql_agent_model_from_env_falls_back_to_generator_model(self) -> None:
+        """Should use SQL_COPILOT_MODEL when SQL_COPILOT_AGENT_MODEL is unset."""
+        os.environ["OPENAI_API_KEY"] = "test-key"
+        os.environ["SQL_COPILOT_MODEL"] = "gpt-4"
+        os.environ.pop("SQL_COPILOT_AGENT_MODEL", None)
+
+        chat_model = config.load_sql_agent_model_from_env()
+
+        self.assertIsNotNone(chat_model)
+        self.assertEqual(chat_model.model_name, "gpt-4")
+        self.assertTrue(hasattr(chat_model, "bind_tools"))
+
+    def test_load_sql_agent_model_from_env_prefers_agent_model(self) -> None:
+        """Should use SQL_COPILOT_AGENT_MODEL over SQL_COPILOT_MODEL when both are set."""
+        os.environ["OPENAI_API_KEY"] = "test-key"
+        os.environ["SQL_COPILOT_MODEL"] = "gpt-4"
+        os.environ["SQL_COPILOT_AGENT_MODEL"] = "gpt-4-agent"
+
+        chat_model = config.load_sql_agent_model_from_env()
+
+        self.assertIsNotNone(chat_model)
+        self.assertEqual(chat_model.model_name, "gpt-4-agent")
+
+    def test_load_sql_agent_model_from_env_does_not_use_responses_api(self) -> None:
+        """The agent model must be built on standard chat completions, not the Responses API."""
+        os.environ["OPENAI_API_KEY"] = "test-key"
+        os.environ["SQL_COPILOT_MODEL"] = "gpt-4"
+
+        chat_model = config.load_sql_agent_model_from_env()
+
+        self.assertIsNotNone(chat_model)
+        self.assertFalse(getattr(chat_model, "use_responses_api", False))
+
+    def test_load_sql_agent_model_from_env_detects_reasoning_model_by_default(self) -> None:
+        """A known reasoning-tier model name should get reasoning_effort='none' with no env override."""
+        os.environ["OPENAI_API_KEY"] = "test-key"
+        os.environ["SQL_COPILOT_AGENT_MODEL"] = "gpt-5"
+        os.environ.pop("SQL_COPILOT_AGENT_REASONING_EFFORT", None)
+
+        chat_model = config.load_sql_agent_model_from_env()
+
+        self.assertIsNotNone(chat_model)
+        self.assertEqual(chat_model.reasoning_effort, "none")
+
+    def test_load_sql_agent_model_from_env_reasoning_effort_env_override(self) -> None:
+        """SQL_COPILOT_AGENT_REASONING_EFFORT should override the name-based default,
+        covering gateway aliases the heuristic doesn't recognize."""
+        os.environ["OPENAI_API_KEY"] = "test-key"
+        os.environ["SQL_COPILOT_AGENT_MODEL"] = "terra-large"
+        os.environ["SQL_COPILOT_AGENT_REASONING_EFFORT"] = "none"
+
+        chat_model = config.load_sql_agent_model_from_env()
+
+        self.assertIsNotNone(chat_model)
+        self.assertEqual(chat_model.reasoning_effort, "none")
+
+    def test_create_app_stores_sql_agent_model_on_state(self) -> None:
+        """create_app should expose the injected sql_agent_model via app.state."""
+        sentinel = object()
+
+        fastapi_app = config.create_app(sql_agent_model=sentinel)
+
+        self.assertIs(fastapi_app.state.sql_agent_model, sentinel)
+
+    def test_create_app_defaults_sql_agent_model_to_none(self) -> None:
+        """create_app should default sql_agent_model to None when not provided."""
+        fastapi_app = config.create_app()
+
+        self.assertIsNone(fastapi_app.state.sql_agent_model)
 
     def test_load_trace_config_defaults(self) -> None:
         """Should return default values when environment variables are not set."""

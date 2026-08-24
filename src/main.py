@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
-from fastapi import FastAPI, Header, HTTPException # pylint: disable=unused-import
+
+from fastapi import Header, HTTPException
 
 from tools.database import DatabaseError, SQLiteDatabase
 from config import create_app_from_env
@@ -257,9 +258,9 @@ def query(payload: QueryRequest, x_user_sub: str = Header(...), x_user_role: str
     try:
         result = start_question(
             question=payload.question,
-            sql_generator_model=app.state.sql_generator_model,
+            database_checker_model=app.state.database_checker_model,
+            agent_model=app.state.sql_agent_model,
             analyst_model=app.state.analyst_model,
-            selector_model=app.state.selector_model,
             intent_model=app.state.intent_model,
             selected_database=database,
             validator=app.state.validator,
@@ -284,7 +285,19 @@ def confirm_query(
     payload: QueryResumeRequest,
     x_user_sub: str = Header(...),
 ) -> dict[str, Any]:
-    """Resume a modification query after the user approves or rejects it."""
+    """Resume an interrupted SQL copilot run: modification approval/rejection,
+    or an agent clarification answer/cancellation.
+
+    Args:
+        payload (QueryResumeRequest): Request to resume the graph.
+        x_user_sub (str, optional): Id of the user that send the query. Defaults to Header(...).
+
+    Raises:
+        HTTPException: Exception if the graph don't resume correctly
+
+    Returns:
+        dict[str, Any]: Output of the graph
+    """
 
     get_user_by_sub(x_user_sub)
 
@@ -293,6 +306,11 @@ def confirm_query(
             payload.thread_id,
             payload.decision,
             edited_sql=payload.edited_sql,
+            answers=(
+                [answer.model_dump() for answer in payload.answers]
+                if payload.answers
+                else None
+            ),
             pending_approval_sessions=app.state.pending_approval_sessions,
             include_trace=app.state.enable_trace,
             trace_log_dir=app.state.trace_log_dir,

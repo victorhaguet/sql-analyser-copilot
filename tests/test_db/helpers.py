@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from shutil import copy2
-from typing import Iterator
+from typing import Iterator, Sequence
 
 from tools.database import RegisteredDatabase, SQLiteDatabase, register_database
 
@@ -37,4 +38,23 @@ def mutable_fixture_database() -> Iterator[SQLiteDatabase]:
     with tempfile.TemporaryDirectory() as temp_dir:
         database_path = Path(temp_dir) / FIXTURE_DB_PATH.name
         copy2(FIXTURE_DB_PATH, database_path)
+        yield SQLiteDatabase(database_path)
+
+
+@contextmanager
+def built_database(ddl_statements: Sequence[str]) -> Iterator[SQLiteDatabase]:
+    """Yield a SQLiteDatabase built from scratch out of the given DDL statements.
+
+    Lets tests define an exact, self-contained schema (tables, foreign keys,
+    unique indexes) instead of depending on the shape of a committed fixture file.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        database_path = Path(temp_dir) / "built.sqlite"
+        connection = sqlite3.connect(database_path)
+        try:
+            for statement in ddl_statements:
+                connection.execute(statement)
+            connection.commit()
+        finally:
+            connection.close()
         yield SQLiteDatabase(database_path)

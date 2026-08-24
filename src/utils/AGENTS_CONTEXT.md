@@ -16,6 +16,9 @@ Shared utilities used across the SQL copilot application.
 - load_prompt() - Load Jinja2 prompt templates with fallback
 - render_prompt() - Render Jinja2 templates with context
 - DEFAULT_DB_PATH - Default SQLite database path
+- LLM - Protocol for the invoke(prompt: str) -> Any nodes (generator, analyst, intent)
+- ToolCallingChatModel - Protocol for bind_tools-capable chat models, used by the
+  SQL generation agent loop (`ChatOpenAI` satisfies it structurally)
 
 ## When to Read Files
 

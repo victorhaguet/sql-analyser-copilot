@@ -16,9 +16,38 @@ from tools.database import (
     DatabaseNotFoundError,
     QueryResult,
     SQLiteDatabase,
+    TableNotFoundError,
+    format_database_schema,
+    format_full_schema,
+    format_table_detail,
     get_default_database,
+    list_referencing_tables,
 )
-from tests.test_db.helpers import FIXTURE_DB_PATH, fixture_database
+from tests.test_db.helpers import FIXTURE_DB_PATH, built_database, fixture_database
+
+# A small, self-contained schema (independent of the Chinook fixture) used to
+# exercise foreign key / index introspection deterministically.
+_RELATIONAL_SCHEMA = (
+    """
+    CREATE TABLE Artist (
+        ArtistId INTEGER PRIMARY KEY,
+        Name NVARCHAR(120) NOT NULL,
+        Country TEXT DEFAULT 'Unknown'
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX IX_Artist_Name ON Artist(Name)
+    """,
+    """
+    CREATE TABLE Album (
+        AlbumId INTEGER PRIMARY KEY,
+        Title NVARCHAR(160) NOT NULL,
+        ArtistId INTEGER NOT NULL REFERENCES Artist(ArtistId) ON DELETE CASCADE
+    )
+    """,
+    "INSERT INTO Artist (ArtistId, Name, Country) VALUES (1, 'AC/DC', 'Australia')",
+    "INSERT INTO Album (AlbumId, Title, ArtistId) VALUES (1, 'Back In Black', 1)",
+)
 
 
 class SQLiteDatabaseTestCase(unittest.TestCase):
@@ -131,6 +160,132 @@ class SQLiteDatabaseTestCase(unittest.TestCase):
         description = self.database.describe()
         self.assertEqual(description["database_path"], str(FIXTURE_DB_PATH.resolve()))
         self.assertIn("Artist", description["tables"])
+
+
+class RelationalIntrospectionTestCase(unittest.TestCase):
+    """Test FK/index introspection and prompt-friendly rendering, against a small
+    schema built from scratch rather than the committed Chinook fixture."""
+
+    def test_get_foreign_keys_returns_outgoing_reference(self) -> None:
+        """Test that get_foreign_keys reports Album's outgoing reference to Artist."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            foreign_keys = database.get_foreign_keys("Album")
+
+        self.assertEqual(len(foreign_keys), 1)
+        self.assertEqual(
+            foreign_keys[0],
+            {
+                "from_column": "ArtistId",
+                "to_table": "Artist",
+                "to_column": "ArtistId",
+                "on_delete": "CASCADE",
+            },
+        )
+
+    def test_get_foreign_keys_returns_empty_for_table_without_fk(self) -> None:
+        """Test that get_foreign_keys returns an empty list when a table has no FKs."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            self.assertEqual(database.get_foreign_keys("Artist"), [])
+
+    def test_get_indexes_reports_unique_index(self) -> None:
+        """Test that get_indexes reports the unique index declared on Artist.Name."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            indexes = database.get_indexes("Artist")
+
+        self.assertEqual(len(indexes), 1)
+        self.assertEqual(indexes[0]["name"], "IX_Artist_Name")
+        self.assertTrue(indexes[0]["unique"])
+        self.assertEqual(indexes[0]["columns"], ["Name"])
+
+    def test_list_referencing_tables_returns_incoming_reference(self) -> None:
+        """Test that list_referencing_tables finds Album referencing Artist."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            referencing = list_referencing_tables(database, "Artist")
+
+        self.assertEqual(
+            referencing,
+            [{"table": "Album", "from_column": "ArtistId", "to_column": "ArtistId"}],
+        )
+
+    def test_list_referencing_tables_empty_when_nothing_references_it(self) -> None:
+        """Test that list_referencing_tables returns an empty list for a leaf table."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            self.assertEqual(list_referencing_tables(database, "Album"), [])
+
+    def test_format_table_detail_marks_not_null_default_and_primary_key(self) -> None:
+        """Test that format_table_detail annotates NOT NULL, DEFAULT, and PRIMARY KEY."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            detail = format_table_detail(database, "Artist")
+
+        self.assertIn("ArtistId INTEGER PRIMARY KEY", detail)
+        self.assertIn("Name NVARCHAR(120) NOT NULL", detail)
+        self.assertIn("Country TEXT DEFAULT 'Unknown'", detail)
+
+    def test_format_table_detail_includes_outgoing_foreign_keys(self) -> None:
+        """Test that format_table_detail lists Album's outgoing FK to Artist."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            detail = format_table_detail(database, "Album")
+
+        self.assertIn("Foreign keys (outgoing):", detail)
+        self.assertIn("Album.ArtistId -> Artist.ArtistId", detail)
+
+    def test_format_table_detail_includes_incoming_foreign_keys(self) -> None:
+        """Test that format_table_detail lists Artist's incoming FK from Album."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            detail = format_table_detail(database, "Artist")
+
+        self.assertIn("Foreign keys (incoming):", detail)
+        self.assertIn("Album.ArtistId -> Artist.ArtistId", detail)
+
+    def test_format_table_detail_includes_unique_indexes(self) -> None:
+        """Test that format_table_detail lists unique indexes."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            detail = format_table_detail(database, "Artist")
+
+        self.assertIn("Unique indexes:", detail)
+        self.assertIn("IX_Artist_Name (Name)", detail)
+
+    def test_format_table_detail_omits_sample_rows_by_default(self) -> None:
+        """Test that format_table_detail does not include sample rows unless asked."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            detail = format_table_detail(database, "Artist")
+
+        self.assertNotIn("Sample rows:", detail)
+
+    def test_format_table_detail_includes_sample_rows_when_requested(self) -> None:
+        """Test that format_table_detail includes sample rows when requested."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            detail = format_table_detail(database, "Artist", include_sample_rows=True)
+
+        self.assertIn("Sample rows:", detail)
+        self.assertIn("AC/DC", detail)
+
+    def test_format_table_detail_raises_for_unknown_table(self) -> None:
+        """Test that format_table_detail raises TableNotFoundError for an unknown table."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            with self.assertRaises(TableNotFoundError):
+                format_table_detail(database, "DoesNotExist")
+
+    def test_format_full_schema_includes_every_table_and_both_fk_directions(self) -> None:
+        """Test that format_full_schema renders all tables with both FK directions."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            text, truncated = format_full_schema(database)
+
+        self.assertFalse(truncated)
+        self.assertIn("Table: Artist", text)
+        self.assertIn("Table: Album", text)
+        self.assertIn("Album.ArtistId -> Artist.ArtistId", text)
+        # No sample rows in the full schema seed.
+        self.assertNotIn("Sample rows:", text)
+
+    def test_format_full_schema_falls_back_when_max_chars_exceeded(self) -> None:
+        """Test that format_full_schema falls back to the compact schema when too large."""
+        with built_database(_RELATIONAL_SCHEMA) as database:
+            text, truncated = format_full_schema(database, max_chars=1)
+            compact_text = format_database_schema(database)
+
+        self.assertTrue(truncated)
+        self.assertEqual(text, compact_text)
 
 
 if __name__ == "__main__":

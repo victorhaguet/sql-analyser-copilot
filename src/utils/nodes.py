@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
 from jinja2 import Environment, StrictUndefined
 
@@ -48,10 +48,42 @@ class LLM(Protocol):
     def invoke(self, prompt: str) -> Any:
         """
         Return model output for the given prompt.
-        
+
         Args:
-            prompt: The input prompt string to generate a response for. 
+            prompt: The input prompt string to generate a response for.
 
         Returns:
             The raw output from the model
+        """
+
+
+class ToolCallingChatModel(Protocol):
+    """Protocol for LangChain chat models capable of tool-calling.
+
+    Unlike `LLM`, `invoke` here takes message-shaped input (e.g. a list of
+    `BaseMessage`) rather than a plain string, and `bind_tools` is what the SQL
+    generation agent loop needs to let the model request tool calls.
+    """
+
+    def bind_tools(self, tools: Sequence[Any]) -> Any:
+        """
+        Return a runnable bound to the given tools, so the model may request
+        tool calls instead of (or alongside) a text answer.
+
+        Args:
+            tools: The tools the model may call.
+
+        Returns:
+            A runnable exposing the same `invoke` interface.
+        """
+
+    def invoke(self, input_: Any) -> Any:
+        """
+        Return model output for the given message input.
+
+        Args:
+            input_: The message(s) to send to the model.
+
+        Returns:
+            The raw output from the model (typically an `AIMessage`).
         """
