@@ -136,8 +136,12 @@ def _derive_agent_tool_log(messages: list[AnyMessage]) -> list[dict[str, Any]]:
 
     Returns:
         list[dict[str, Any]]: `{iteration, tool, arguments, result}` per tool
-        call, in the order the calls were made. `result` is `None` until the
-        matching `ToolMessage` is found (e.g. a call still awaiting `interrupt()` resume).
+        call, in the order the calls were made, plus one synthetic
+        `generate_sql` entry for the final AIMessage turn (the one with no
+        tool calls, where the agent produces the SQL and rationale instead —
+        it would otherwise vanish from the trail entirely). `result` is
+        `None` until the matching `ToolMessage` is found (e.g. a call still
+        awaiting `interrupt()` resume).
     """
     tool_log: list[dict[str, Any]] = []
     pending_by_call_id: dict[str, dict[str, Any]] = {}
@@ -145,6 +149,15 @@ def _derive_agent_tool_log(messages: list[AnyMessage]) -> list[dict[str, Any]]:
     for message in messages:
         if isinstance(message, AIMessage):
             iteration += 1
+            if not message.tool_calls and message.content:
+                tool_log.append(
+                    {
+                        "iteration": iteration,
+                        "tool": "generate_sql",
+                        "arguments": {},
+                        "result": message.content,
+                    }
+                )
             for tool_call in message.tool_calls:
                 entry: dict[str, Any] = {
                     "iteration": iteration,

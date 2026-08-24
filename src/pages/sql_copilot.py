@@ -492,7 +492,7 @@ def _render_agent_steps(result_state: dict[str, object]) -> None:
 
 @st.dialog(
     "Review SQL modification",
-    width="large",
+    width="medium",
     dismissible=False,
     icon=":material/database:",
 )
@@ -607,7 +607,7 @@ def _render_approval_dialog(
 
 @st.dialog(
     "The copilot needs more details",
-    width="large",
+    width="medium",
     dismissible=False,
     icon=":material/help:",
 )
@@ -650,7 +650,7 @@ def _render_clarification_dialog(
         )
 
     with st.container(horizontal=True, horizontal_alignment="distribute"):
-        if st.button("Send answers", width="content", key="send_clarification_answers"):
+        if st.button("Send answer", width="content", key="send_clarification_answers"):
             with st.spinner("Sending answers..."):
                 updated_state = call_confirmation_api(
                     thread_id,
