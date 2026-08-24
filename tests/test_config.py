@@ -25,6 +25,7 @@ class ConfigTestCase(unittest.TestCase):
             "OPENAI_BASE_URL": None,
             "SQL_COPILOT_MODEL": None,
             "SQL_COPILOT_ANALYST_MODEL": None,
+            "SQL_COPILOT_INTENT_MODEL": None,
             "SQL_COPILOT_AGENT_MODEL": None,
             "SQL_COPILOT_AGENT_REASONING_EFFORT": None,
             "ENABLE_TRACE_LOGGING": None,
@@ -120,6 +121,17 @@ class ConfigTestCase(unittest.TestCase):
         self.assertEqual(result[0].model, "gpt-4")
         self.assertEqual(result[1].model, "gpt-4")
         self.assertEqual(result[2].model, "gpt-4")
+
+    def test_load_models_from_env_reuses_identical_model_clients(self) -> None:
+        """Roles configured with the same model should share one stateless client."""
+        os.environ["OPENAI_API_KEY"] = "test-key"
+        os.environ["SQL_COPILOT_MODEL"] = "gpt-4"
+        os.environ.pop("SQL_COPILOT_ANALYST_MODEL", None)
+
+        checker_model, analyst_model, intent_model = config.load_models_from_env()
+
+        self.assertIs(checker_model, analyst_model)
+        self.assertIs(checker_model, intent_model)
 
     def test_load_sql_agent_model_from_env_returns_none_when_no_api_key(self) -> None:
         """Should return None when OPENAI_API_KEY is not set."""

@@ -10,7 +10,6 @@ for parent in Path(__file__).resolve().parents:
         break
 
 from tools.agent_tools import AgentToolLimits, build_agent_tools
-from tools.database import SQLiteDatabase
 from tools.sql_safety import SQLSafetyValidator
 from tests.test_db.helpers import built_database
 

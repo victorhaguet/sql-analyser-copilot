@@ -17,7 +17,7 @@ for parent in Path(__file__).resolve().parents:
 
 from langchain_core.messages import AIMessage
 from langgraph.types import Interrupt
-from tools.database import DatabaseError, SQLiteDatabase
+from tools.database import SQLiteDatabase
 from core import (
     PendingApprovalSession,
     answer_question,
@@ -32,7 +32,6 @@ from core import (
     _serialize_query_result,
     _serialize_state,
 )
-from tests.test_db.helpers import fixture_registered_database
 
 
 class FakeResponse:
@@ -252,10 +251,9 @@ class CoreTestCase(unittest.TestCase):
     def test_answer_question_runs_full_pipeline(self) -> None:
         """Test that the answer_question function correctly orchestrates the full pipeline from question to analysis."""
         
-        # Mock the selector model to always match
-        selector_model = FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}')
-        
-        generator_model = FakeModel("unused")
+        # The checker allows the request to continue into the agent workflow.
+        database_checker_model = FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}')
+
         agent_model = ScriptedChatModel(
             [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId")]
         )
@@ -263,10 +261,9 @@ class CoreTestCase(unittest.TestCase):
         intent_model = FakeModel('{"intent": "query"}')
         result = answer_question(
             question="What are the first two artists?",
-            sql_generator_model=generator_model,
             agent_model=agent_model,
             analyst_model=analyst_model,
-            selector_model=selector_model,
+            database_checker_model=database_checker_model,
             intent_model=intent_model,
             selected_database=SQLiteDatabase(),
         )
@@ -287,14 +284,13 @@ class CoreTestCase(unittest.TestCase):
             "ORDER BY AlbumCount DESC "
             "LIMIT 5"
         )
-        selector_model = FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}')
+        database_checker_model = FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}')
         with tempfile.TemporaryDirectory() as temp_dir:
             result = answer_question(
                 question="Which 5 artists have the most albums ?",
-                sql_generator_model=FakeModel("unused"),
                 agent_model=ScriptedChatModel([AIMessage(content=sql_query)]),
                 analyst_model=FakeModel("Top artists returned."),
-                selector_model=selector_model,
+                database_checker_model=database_checker_model,
                 intent_model=FakeModel('{"intent": "query"}'),
                 selected_database=SQLiteDatabase(),
                 include_trace=True,
@@ -312,9 +308,8 @@ class CoreTestCase(unittest.TestCase):
 
         result = answer_question(
             question="What will the weather be tomorrow?",
-            sql_generator_model=FakeModel("unused"),
             agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
-            selector_model=FakeModel(
+            database_checker_model=FakeModel(
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
             ),
             intent_model=FakeModel('{"intent": "query"}'),
@@ -328,9 +323,8 @@ class CoreTestCase(unittest.TestCase):
 
         result = answer_question(
             question="What will the weather be tomorrow?",
-            sql_generator_model=FakeModel("unused"),
             agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
-            selector_model=FakeModel(
+            database_checker_model=FakeModel(
                 '{"match": false, "database": "", "candidate_databases": [], "reason": "This question is unrelated to the configured database."}'
             ),
             intent_model=FakeModel('{"intent": "query"}'),
@@ -343,9 +337,8 @@ class CoreTestCase(unittest.TestCase):
         """Readonly users should be blocked before SQL generation on modifications."""
         result = answer_question(
             question="Delete all artists",
-            sql_generator_model=FakeModel("unused"),
             agent_model=ScriptedChatModel([AIMessage(content="DELETE FROM Artist")]),
-            selector_model=FakeModel(
+            database_checker_model=FakeModel(
                 '{"match": true, "database": "music", "candidate_databases": [], "reason": "Match found"}'
             ),
             intent_model=FakeModel('{"intent": "modification"}'),
@@ -361,12 +354,11 @@ class CoreTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             result = answer_question(
                 question="What are the first two artists?",
-                sql_generator_model=FakeModel("unused"),
                 agent_model=ScriptedChatModel(
                     [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId")]
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
-                selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+                database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
                 intent_model=FakeModel('{"intent": "query"}'),
                 selected_database=SQLiteDatabase(),
                 include_trace=True,
@@ -385,12 +377,11 @@ class CoreTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             result = answer_question(
                 question="What are the first two artists?",
-                sql_generator_model=FakeModel("unused"),
                 agent_model=ScriptedChatModel(
                     [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId")]
                 ),
                 analyst_model=FakeModel("The first two artists are AC/DC and Accept."),
-                selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+                database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
                 intent_model=FakeModel('{"intent": "query"}'),
                 selected_database=SQLiteDatabase(),
                 include_trace=True,
@@ -412,7 +403,9 @@ class CoreTestCase(unittest.TestCase):
 
         result = answer_question(
             question="What are the first two artists?",
-            sql_generator_model=FakeModel("unused"),
+            database_checker_model=FakeModel(
+                '{"match": true, "database": "chinook", "reason": "Matches question"}'
+            ),
             agent_model=ScriptedChatModel(
                 [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId <= 2 ORDER BY ArtistId")]
             ),
@@ -429,9 +422,8 @@ class CoreTestCase(unittest.TestCase):
         steps = list(
             stream_question(
                 question="Delete all artists",
-                sql_generator_model=FakeModel("unused"),
                 agent_model=ScriptedChatModel([AIMessage(content="DELETE FROM Artist")]),
-                selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+                database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
                 intent_model=FakeModel('{"intent": "modification"}'),
                 selected_database=SQLiteDatabase(),
             )
@@ -449,9 +441,8 @@ class CoreTestCase(unittest.TestCase):
         steps = list(
             stream_question(
                 question="What will the weather be tomorrow?",
-                sql_generator_model=FakeModel("unused"),
                 agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
-                selector_model=FakeModel(
+                database_checker_model=FakeModel(
                     '{"match": false, "database": "", "candidate_databases": [], "reason": "No configured database matches."}'
                 ),
                 selected_database=SQLiteDatabase(),
@@ -465,7 +456,6 @@ class CoreTestCase(unittest.TestCase):
     def test_stream_question_exposes_execution_steps(self) -> None:
         """Streaming should expose each execution step with node name, update, and outcome."""
 
-        generator_model = FakeModel("unused")
         agent_model = ScriptedChatModel(
             [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId = 1")]
         )
@@ -474,7 +464,9 @@ class CoreTestCase(unittest.TestCase):
         steps = list(
             stream_question(
                 question="Who is the first artist?",
-                sql_generator_model=generator_model,
+                database_checker_model=FakeModel(
+                    '{"match": true, "database": "chinook", "reason": "Matches question"}'
+                ),
                 agent_model=agent_model,
                 analyst_model=analyst_model,
                 intent_model=FakeModel('{"intent": "query"}'),
@@ -597,7 +589,7 @@ class CoreTestCase(unittest.TestCase):
         with patch("core.build_sql_agent_graph", return_value=fake_graph):
             result = start_question(
                 question="Delete artist 1",
-                sql_generator_model=FakeModel("unused"),
+                database_checker_model=FakeModel("unused by mocked graph"),
                 agent_model=ScriptedChatModel(
                     [AIMessage(content="DELETE FROM Artist WHERE ArtistId = 1")]
                 ),
@@ -867,7 +859,7 @@ class CoreTestCase(unittest.TestCase):
         with patch("core.build_sql_agent_graph", return_value=fake_graph):
             started = start_question(
                 question="add a new artist called X",
-                sql_generator_model=FakeModel("unused"),
+                database_checker_model=FakeModel("unused by mocked graph"),
                 agent_model=ScriptedChatModel(
                     [AIMessage(content="INSERT INTO Artist (Name) VALUES ('X')")]
                 ),

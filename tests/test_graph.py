@@ -716,9 +716,8 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph
 
         graph = build_sql_agent_graph(
-            FakeModel("unused"),
             agent_model=ScriptedChatModel([AIMessage(content="DELETE FROM Artist")]),
-            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+            database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
             intent_model=FakeModel('{"intent": "query"}'),
             selected_database=SQLiteDatabase(),
         )
@@ -732,9 +731,8 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph
 
         graph = build_sql_agent_graph(
-            FakeModel("unused"),
             agent_model=ScriptedChatModel([AIMessage(content="SELECT * FROM Artist")]),
-            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+            database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
             intent_model=FakeModel('{"intent": "query"}'),
             selected_database=SQLiteDatabase(),
         )
@@ -782,9 +780,8 @@ class SQLGraphTestCase(unittest.TestCase):
                 )
 
             graph = build_sql_agent_graph(
-                FakeModel("unused"),
                 agent_model=model,
-                selector_model=FakeModel(
+                database_checker_model=FakeModel(
                     '{"match": true, "database": "music", "reason": "Matches question"}'
                 ),
                 intent_model=FakeModel('{"intent": "modification"}'),
@@ -843,9 +840,8 @@ class SQLGraphTestCase(unittest.TestCase):
                 ]
             )
             graph = build_sql_agent_graph(
-                FakeModel("unused"),
                 agent_model=model,
-                selector_model=FakeModel(
+                database_checker_model=FakeModel(
                     '{"match": true, "database": "music", "reason": "Matches question"}'
                 ),
                 intent_model=FakeModel('{"intent": "modification"}'),
@@ -908,9 +904,8 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph
 
         graph = build_sql_agent_graph(
-            FakeModel("unused"),
             agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
-            selector_model=FakeModel(
+            database_checker_model=FakeModel(
                 '{"match": false, "database": "", "reason": "No configured database matches."}'
             ),
             selected_database=SQLiteDatabase(),
@@ -927,9 +922,8 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph
 
         graph = build_sql_agent_graph(
-            FakeModel("unused"),
             agent_model=ScriptedChatModel([AIMessage(content="SELECT Name FROM Artist")]),
-            selector_model=FakeModel(
+            database_checker_model=FakeModel(
                 '{"match": false, "database": "", "reason": "Question does not relate to database."}'
             ),
             selected_database=SQLiteDatabase(),
@@ -946,11 +940,10 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph, stream_sql_agent_execution
 
         graph = build_sql_agent_graph(
-            FakeModel("unused"),
             agent_model=ScriptedChatModel(
                 [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId = 1")]
             ),
-            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+            database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
             intent_model=FakeModel('{"intent": "query"}'),
             selected_database=SQLiteDatabase(),
         )
@@ -981,9 +974,9 @@ class SQLGraphTestCase(unittest.TestCase):
         from graph import build_sql_agent_graph
 
         graph = build_sql_agent_graph(
-            FakeModel('{"intent": "modification"}'),
             agent_model=ScriptedChatModel([AIMessage(content="DELETE FROM Artist")]),
-            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+            database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+            intent_model=FakeModel('{"intent": "modification"}'),
             selected_database=SQLiteDatabase(),
         )
         result = graph.invoke(
@@ -995,15 +988,14 @@ class SQLGraphTestCase(unittest.TestCase):
         self.assertNotIn("generated_sql", result)
 
     def test_stream_sql_agent_execution_with_intent_classifier(self) -> None:
-        """Streaming should expose intent_classifier after database_selector."""
+        """Streaming should expose intent_classifier after database_checker."""
         from graph import build_sql_agent_graph, stream_sql_agent_execution
 
         graph = build_sql_agent_graph(
-            FakeModel("unused"),
             agent_model=ScriptedChatModel(
                 [AIMessage(content="SELECT Name FROM Artist WHERE ArtistId = 1")]
             ),
-            selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+            database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
             intent_model=FakeModel('{"intent": "query"}'),
             selected_database=SQLiteDatabase(),
         )

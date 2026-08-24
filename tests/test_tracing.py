@@ -23,7 +23,6 @@ from tracing import (
     truncate_trace_lines,
     build_trace_log_content,
     write_trace_log,
-    TRACE_LOG_DIR
 )
 from tools.database import QueryResult
 
@@ -182,22 +181,6 @@ class TracingTestCase(unittest.TestCase):
         )
         self.assertIn("User Role: readonly", result)
         self.assertIn("Error: Writes are forbidden", result)
-
-    def test_format_trace_step_sql_generator(self) -> None:
-        """format_trace_step should format sql_generator node."""
-        
-        step = build_trace_step(
-            "sql_generator",
-            {
-                "generated_sql": "SELECT * FROM test",
-            },
-        )
-        
-        result = format_trace_step(step)
-        
-        self.assertIn("Node: sql_generator", result)
-        self.assertIn("Outcome: success", result)
-        self.assertIn("SELECT * FROM test", result)
 
     def test_format_trace_step_sql_validator_success(self) -> None:
         """format_trace_step should format sql_validator with validated SQL."""
@@ -585,7 +568,12 @@ class TracingTestCase(unittest.TestCase):
 
     def test_write_trace_log_appends_steps_to_existing_file_from_dict_path(self) -> None:
         """write_trace_log should append new steps to an existing trace file."""
-        old_trace = [build_trace_step("sql_generator", {"generated_sql": "SELECT 1"})]
+        old_trace = [
+            build_trace_step(
+                "sql_agent_finalize",
+                {"generated_sql": "SELECT 1", "agent_status": "final"},
+            )
+        ]
         new_trace = [build_trace_step("result_analyst", {"analysis": "Returned one row."})]
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -612,7 +600,12 @@ class TracingTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             existing_path = write_trace_log(
                 "Original question",
-                [build_trace_step("sql_generator", {"generated_sql": "SELECT 1"})],
+                [
+                    build_trace_step(
+                        "sql_agent_finalize",
+                        {"generated_sql": "SELECT 1", "agent_status": "final"},
+                    )
+                ],
                 temp_dir,
             )
 

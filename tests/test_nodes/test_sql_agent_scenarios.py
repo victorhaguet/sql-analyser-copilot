@@ -70,9 +70,8 @@ class ScriptedChatModel:
 def _build_graph(database, agent_model, *, intent: str = "query"):
     """Build a graph wired for these scenarios: fixed database/intent selection."""
     return build_sql_agent_graph(
-        FakeModel("unused"),
         agent_model=agent_model,
-        selector_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
+        database_checker_model=FakeModel('{"match": true, "database": "chinook", "reason": "Matches question"}'),
         intent_model=FakeModel(f'{{"intent": "{intent}"}}'),
         selected_database=database,
     )
