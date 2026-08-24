@@ -95,9 +95,17 @@ class DeriveAgentToolLogTestCase(unittest.TestCase):
         """No messages should produce an empty tool log."""
         self.assertEqual(_derive_agent_tool_log([]), [])
 
-    def test_final_answer_with_no_tool_calls_produces_no_entries(self) -> None:
-        """An AIMessage with no tool calls should not add a log entry."""
+    def test_final_answer_with_no_tool_calls_produces_a_generate_sql_entry(self) -> None:
+        """A final AIMessage with no tool calls should surface as a generate_sql step."""
         messages = [SystemMessage(content="sys"), HumanMessage(content="q"), AIMessage(content="SELECT 1")]
+        self.assertEqual(
+            _derive_agent_tool_log(messages),
+            [{"iteration": 1, "tool": "generate_sql", "arguments": {}, "result": "SELECT 1"}],
+        )
+
+    def test_empty_final_answer_produces_no_entry(self) -> None:
+        """An AIMessage with neither tool calls nor content should not add a log entry."""
+        messages = [AIMessage(content="")]
         self.assertEqual(_derive_agent_tool_log(messages), [])
 
     def test_single_tool_call_paired_with_its_result(self) -> None:
@@ -143,7 +151,7 @@ class DeriveAgentToolLogTestCase(unittest.TestCase):
             AIMessage(content="SELECT 1"),
         ]
         log = _derive_agent_tool_log(messages)
-        self.assertEqual([entry["iteration"] for entry in log], [1, 2])
+        self.assertEqual([entry["iteration"] for entry in log], [1, 2, 3])
 
     def test_multiple_tool_calls_in_one_batch_share_iteration(self) -> None:
         """Two tool calls in the same AIMessage turn should share one iteration."""
