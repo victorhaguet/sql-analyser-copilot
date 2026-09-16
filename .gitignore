@@ -9,3 +9,6 @@ __pycache__/
 
 # generated execution traces
 logs/
+
+# local user/auth database
+.users/

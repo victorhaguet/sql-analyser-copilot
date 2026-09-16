@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator, overload
 from uuid import uuid4
 
-_USERS_DIR = Path(__file__).resolve().parents[3] / ".users"
+_USERS_DIR = Path(__file__).resolve().parents[2] / ".users"
 _USERS_DB = _USERS_DIR / "users.db"
 
 _ROLE_ADMIN = "admin"
